@@ -8,6 +8,7 @@ __pattern__ = "Strategy"
 import os
 import httpx
 import json
+import redis as _redis_sync
 from fastapi import FastAPI, Request, Response
 from strategies import (
     PassthroughStrategy, StallDetectionStrategy, ConfidenceThresholdStrategy, RoutingStrategy
@@ -43,12 +44,34 @@ def _build_strategy() -> RoutingStrategy:
 
 routing_strategy = _build_strategy()
 
+REDIS_URL_PROXY = os.environ.get("REDIS_URL", "redis://localhost:6379")
+
+
+def _log_escalation(problem_uuid: str | None) -> None:
+    """Increment Redis escalation counters (fire-and-forget, never raises)."""
+    try:
+        r = _redis_sync.from_url(REDIS_URL_PROXY, decode_responses=True, socket_timeout=1)
+        r.incr("oak:telemetry:escalations")
+        if problem_uuid:
+            r.hincrby(f"oak:telemetry:problem:{problem_uuid}", "escalations", 1)
+        r.close()
+    except Exception:
+        pass  # telemetry is non-blocking; proxy must not fail on Redis down
+
 
 async def proxy(request: Request, path: str) -> Response:
     """
     Core proxy function. NEVER modify this function — routing decisions
     are delegated entirely to routing_strategy.should_escalate().
     """
+    # Log total call count
+    try:
+        r = _redis_sync.from_url(REDIS_URL_PROXY, decode_responses=True, socket_timeout=1)
+        r.incr("oak:telemetry:total_calls")
+        r.close()
+    except Exception:
+        pass  # telemetry is non-blocking; proxy must not fail on Redis down
+
     body = await request.body()
     headers = dict(request.headers)
     headers.pop("host", None)
@@ -85,6 +108,8 @@ async def proxy(request: Request, path: str) -> Response:
                 content=body,
                 headers=escalation_headers,
             )
+        problem_uuid = headers.get("x-oak-problem-uuid")
+        _log_escalation(problem_uuid)
         return Response(
             content=claude_resp.content,
             status_code=claude_resp.status_code,
