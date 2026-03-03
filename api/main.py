@@ -1,17 +1,27 @@
 __pattern__ = "Observer"
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 
 from api.config import settings
 from api.routers import problems, tasks, agents, skills, telemetry, judge
+from api.routers.mailbox import router as mailbox_router
 from api.ws import stream
 from api.dependencies import get_event_bus
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    get_event_bus()  # Register EventBus subscribers on startup
+    yield
+
 
 app = FastAPI(
     title="OAK API",
     description="Orchestrated Agent Kernel -- TRUNK layer",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # Register routers
@@ -21,13 +31,9 @@ app.include_router(agents.router)
 app.include_router(skills.router)
 app.include_router(telemetry.router)
 app.include_router(judge.router)
+app.include_router(mailbox_router)
 app.include_router(stream.router)
 
-
-@app.on_event("startup")
-async def startup():
-    # Register EventBus subscribers
-    get_event_bus()
 
 
 @app.get("/health")
