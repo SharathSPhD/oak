@@ -196,6 +196,39 @@ curl http://localhost:8000/api/telemetry
 
 ---
 
+---
+
+## DGX Spark Hardware Gates
+
+### Status: COMPLETE — all gates passed on DGX Spark (NVIDIA GB10, 121 GB RAM)
+
+| Gate | Result | Notes |
+|---|---|---|
+| All 6 Docker images build successfully | ✅ PASS | `oak/api-proxy`, `oak/harness`, `oak/api`, `oak/ui`, `oak/postgres` (pgvector), `oak/redis` |
+| `docker compose up` — all 6 containers healthy | ✅ PASS | postgres, redis, oak-api, oak-api-proxy, oak-ollama, oak-ui all `healthy` or `Up` |
+| `GET /health` on oak-api (port 8000) | ✅ PASS | `{"status":"healthy","oak_mode":"dgx","routing_strategy":"passthrough",...}` |
+| `GET /health` on oak-api-proxy (port 9000) | ✅ PASS | `{"status":"healthy","routing_strategy":"passthrough","ollama_url":"http://oak-ollama:11434",...}` |
+| Proxy routes `GET /v1/models` to Ollama | ✅ PASS | Returns `qwen3-coder:latest` from Ollama |
+| Redis session state survives (contract tests) | ✅ PASS | `tests/contract/test_session_state.py` — 3/3 pass with live Redis |
+| Tool-proxy deny-pattern blocks (contract tests) | ✅ PASS | `tests/contract/test_tool_proxy.py` — 11/11 pass |
+| `GET /health` on oak-ui (port 8501) | ✅ PASS | Streamlit returns `ok` |
+| Ollama model available via proxy | ✅ PASS | `qwen3-coder:latest` (18 GB) pulled and serving |
+| 115 unit + integration + contract tests passing | ✅ PASS | `pytest tests/` — 115 passed, 4 skipped |
+| `bootstrap.sh dgx` self-contained from any CWD | ✅ PASS | Uses `--project-directory` with script-relative OAK_ROOT |
+| `restore_session()` implemented in redis_client | ✅ PASS | Scans `oak:session:{agent_id}:*` keys with TTL |
+| EventBus subscribers wired (Telemetry, WS, Episodic) | ✅ PASS | All three subscribers implemented; fire-and-forget, never block producer |
+
+### Bugs Fixed During Hardware Gates
+- **Proxy 404s**: `/health` route was defined after catch-all `/{path:path}` — FastAPI matched catch-all first. Fixed by moving `/health` before catch-all.
+- **Proxy double `/v1/`**: catch-all passed `v1/models` as path, proxy prepended `/v1/` → `/v1/v1/models`. Fixed: forward `/{path}` directly (Ollama supports Anthropic `/v1/messages` natively since 0.3.2).
+- **UI unhealthy**: `curl` not in `python:3.11-slim`. Fixed: Python `httpx` healthcheck.
+- **API missing `sqlalchemy`**: `docker/api/Dockerfile` lacked `sqlalchemy[asyncio]>=2.0`. Fixed.
+
+### Branch
+`feat/dgx-hardware-gates` → merged to `main` via fast-forward.
+
+---
+
 ## Git Worktree Workflow
 
 OAK uses Git worktrees to isolate concerns. Each worktree is checked out on its own branch.

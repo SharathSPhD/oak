@@ -84,7 +84,7 @@ async def proxy(request: Request, path: str) -> Response:
     async with httpx.AsyncClient(timeout=120) as client:
         ollama_resp = await client.request(
             method=request.method,
-            url=f"{OLLAMA_BASE_URL}/v1/{path}",
+            url=f"{OLLAMA_BASE_URL}/{path}",
             content=body,
             headers=headers,
         )
@@ -126,11 +126,6 @@ async def proxy(request: Request, path: str) -> Response:
     )
 
 
-@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-async def catch_all(request: Request, path: str):
-    return await proxy(request, path)
-
-
 @app.get("/health")
 async def health():
     return {
@@ -140,3 +135,8 @@ async def health():
         "ollama_url": OLLAMA_BASE_URL,
         "escalation_available": bool(ANTHROPIC_API_KEY_REAL),
     }
+
+
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def catch_all(request: Request, path: str):
+    return await proxy(request, path)
