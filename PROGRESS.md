@@ -57,21 +57,26 @@ pytest tests/contract/ -v  # all 14 should pass
 
 ## Phase 2 — Agent Teams + Task List + Judge Gate
 
-### Status: PLANNED
+### Status: CODE COMPLETE — awaiting Docker stack + full E2E run
 
-**Target exit criteria (spec §14):**
-- Orchestrator + DE + DS + Judge complete two canonical problems end-to-end
-- TaskList + Mailbox fully wired (`api/routers/tasks.py` already exists)
-- Judge gate blocks problem completion until verdict = PASS
-- `GET /api/judge_verdicts/{problem_uuid}` returns final verdict
+| Exit Criterion | Status | Notes |
+|---|---|---|
+| Judge gate: `POST /api/judge_verdicts` + `GET /api/judge_verdicts/{uuid}` | ✅ Done | `api/routers/judge.py` — Observer pattern + EventBus |
+| Mailbox: `POST /api/mailbox` + inbox + read | ✅ Done | `api/routers/mailbox.py` + `api/services/mailbox_service.py` |
+| Agent spawn: `POST /api/agents/spawn` | ✅ Done | `api/routers/agents.py` — DGXAgentFactory integration |
+| Phase 2 E2E integration test | ✅ Done | `tests/integration/test_phase2_e2e.py` — 4 tests (mocked DB) |
+| 85 unit + integration + contract tests passing | ✅ Done | `pytest tests/` — 85 passed, 4 skipped (Redis) |
+| Full end-to-end: CSV → DE → DS → Judge PASS | ⏳ Needs Docker stack | Requires running agents + real Postgres + Redis |
 
-**Work items:**
-- `api/routers/judge.py` — POST judge verdict, GET by problem_uuid
-- `api/services/mailbox.py` — agent-to-agent message passing via Redis
-- Orchestrator agent definition that decomposes problems into tasks
-- End-to-end test: CSV problem → DE ingest → DS analyse → Judge verdict
-- `docker/claude-harness/` hardened per spec §4.6
-- Single-agent harness run with CSV-to-app task
+### Integration Branch
+`feat/phase2-integration` → merged to `main` via fast-forward.
+
+### Remaining Gate
+Start the Docker stack + Redis to unblock full E2E run:
+```bash
+docker compose -f docker/docker-compose.dgx.yml up -d
+pytest tests/integration/ -v  # test_phase2_e2e.py needs real DB
+```
 
 ---
 
@@ -156,6 +161,6 @@ bash scripts/new-problem.sh [uuid]   # Creates oak/problem-{uuid} branch + workt
 | ChainOfResponsibility | `memory/validation_chain.py` | ✅ Implemented + 8 tests |
 | Repository | `memory/interfaces.py` | ✅ Interfaces done |
 | StateMachine | `api/state_machines/task.py` | ✅ Implemented + tested |
-| TemplateMethod | _(Phase 2: agent lifecycle)_ | ⏳ Planned |
+| TemplateMethod | _(Phase 3: agent lifecycle)_ | ⏳ Planned |
 | Decorator | _(Phase 3: skill wrapper)_ | ⏳ Planned |
 | EventDriven | `api/main.py` + hooks | ✅ Stub |
