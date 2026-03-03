@@ -118,6 +118,28 @@ class TelemetryEvent(BaseModel):
     timestamp_utc: float
 
 
+class TelemetryEventCreate(BaseModel):
+    """Record a single agent telemetry event."""
+    problem_id: UUID | None = None
+    agent_id: str
+    event_type: str  # e.g. "tool_called", "agent_spawned", "agent_terminated", "escalation"
+    tool_name: str | None = None
+    tool_input: dict | None = None
+    tool_response: dict | None = None
+    duration_ms: int | None = None
+    escalated: bool = False
+
+
+class TelemetryResponse(BaseModel):
+    """Aggregated telemetry metrics for the /health + dashboard."""
+    total_events: int
+    total_escalations: int
+    escalation_rate_pct: float  # escalations / total_events * 100
+    events_by_type: dict[str, int]
+    active_problems: int
+    recent_events: list[dict]  # last 20 events (id, agent_id, event_type, created_at)
+
+
 # ── Internal Events (hook relay) ────────────────────────────────────────────
 
 class InternalEvent(BaseModel):
