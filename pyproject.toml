@@ -60,6 +60,11 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--tb=short -q"
+markers = [
+    "integration: marks tests as integration tests (require real DB)",
+    "contract: marks tests as contract tests (require real services)",
+    "smoke: marks tests as smoke tests",
+]
 
 [tool.coverage.run]
 source = ["api", "memory", "oak_mcp"]
