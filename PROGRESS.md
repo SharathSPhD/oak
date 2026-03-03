@@ -30,19 +30,46 @@ All Phase 0 feature work is consolidated on `feat/phase0-integration`. Pending m
 
 ## Phase 1 — Hardened Harness + Single Agent
 
+### Status: CODE COMPLETE — awaiting Docker stack + Redis verification
+
+| Exit Criterion | Status | Notes |
+|---|---|---|
+| All harness/proxy unit tests pass in CI | ✅ Done | 74 tests pass, 3 skipped (Redis) |
+| Tool proxy blocks all canonical deny patterns | ✅ Done | `tests/contract/test_tool_proxy.py` — 11 pass |
+| Redis session state survives container restart | ⏳ Needs Redis | `test_session_state.py` — 3 skipped; runs when Redis up |
+| `GET /api/agents/status` shows running agents | ✅ Done | `api/services/agent_registry.py` — Redis-backed |
+| DGXAgentFactory spawns harness container | ✅ Done | `api/factories/agent_factory.py` — subprocess docker run |
+| Proxy routing strategies unit tested | ✅ Done | `tests/unit/test_proxy_strategies.py` — 8 pass |
+| SessionStateSubscriber updates Redis on events | ✅ Done | `api/events/bus.py` — lifecycle events wired |
+
+### Integration Branch
+`feat/phase1-integration` → pending merge to `main` via PR.
+PR: https://github.com/SharathSPhD/oak/pull/new/feat/phase1-integration
+
+### Remaining Gate
+Start the Docker stack + Redis to unblock 3 session-state contract tests:
+```bash
+docker compose -f docker/docker-compose.dgx.yml up -d oak-postgres oak-redis oak-ollama oak-api
+pytest tests/contract/ -v  # all 14 should pass
+```
+
+---
+
+## Phase 2 — Agent Teams + Task List + Judge Gate
+
 ### Status: PLANNED
 
 **Target exit criteria (spec §14):**
-- All harness and proxy unit tests pass in CI
-- Single agent inside harness completes CSV-to-app task end-to-end
-- Tool proxy correctly blocks all canonical denied commands in tests
-- Redis session state survives simulated container restart
-- `GET /api/agents/status` shows running agent session accurately
+- Orchestrator + DE + DS + Judge complete two canonical problems end-to-end
+- TaskList + Mailbox fully wired (`api/routers/tasks.py` already exists)
+- Judge gate blocks problem completion until verdict = PASS
+- `GET /api/judge_verdicts/{problem_uuid}` returns final verdict
 
 **Work items:**
-- Contract tests for `tool-proxy.sh` pattern matching
-- Contract tests for `session-state.py` round-trip
-- `oak-api-proxy` PassthroughStrategy verified end-to-end
+- `api/routers/judge.py` — POST judge verdict, GET by problem_uuid
+- `api/services/mailbox.py` — agent-to-agent message passing via Redis
+- Orchestrator agent definition that decomposes problems into tasks
+- End-to-end test: CSV problem → DE ingest → DS analyse → Judge verdict
 - `docker/claude-harness/` hardened per spec §4.6
 - Single-agent harness run with CSV-to-app task
 

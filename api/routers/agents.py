@@ -22,6 +22,10 @@ async def spawn_agent(
 
 
 @router.get("/status", response_model=list[AgentStatusResponse])
-async def get_agents_status() -> list[AgentStatusResponse]:
-    """Returns status of all active agent sessions. Phase 0: always empty."""
-    return []
+async def get_agents_status(
+    settings: OAKSettings = Depends(get_settings),
+) -> list[AgentStatusResponse]:
+    """Returns status of all active agent sessions from Redis."""
+    from api.services.agent_registry import AgentRegistry
+    registry = AgentRegistry(str(settings.redis_url))
+    return await registry.get_all()

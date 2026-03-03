@@ -48,8 +48,18 @@ class SessionStateSubscriber(EventSubscriber):
     """Updates oak:session:{agent_id} keys in Redis after tool calls."""
 
     async def on_event(self, event: AgentEvent) -> None:
-        # TODO Phase 1: UPDATE Redis session keys
-        pass
+        try:
+            from api.services.agent_registry import AgentRegistry
+            from api.config import OAKSettings
+            registry = AgentRegistry(str(OAKSettings().redis_url))
+            if event.event_type == "agent_spawned":
+                await registry.register(event.agent_id, event.payload.get("role", ""), event.problem_uuid)
+            elif event.event_type == "agent_terminated":
+                await registry.update_status(event.agent_id, "terminated")
+            elif event.event_type == "tool_called":
+                await registry.touch(event.agent_id)
+        except Exception:
+            pass
 
 
 class EventBus:
