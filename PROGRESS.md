@@ -118,6 +118,46 @@ curl "http://localhost:8000/api/skills?query=csv"
 
 ---
 
+## Phase 4 — Mac Mini Port + Stall Detection + Telemetry
+
+### Status: CODE COMPLETE — awaiting Docker stack + Mac Mini hardware verification
+
+| Exit Criterion | Status | Notes |
+|---|---|---|
+| `docker/docker-compose.mini.yml` fully configured | ✅ Done | `oak-api` + `oak-api-proxy` services with Mac Mini profiles |
+| `OAK_MODE=mini` — smaller models, lower resource caps | ✅ Done | `DEFAULT_MODEL: llama3.2:3b`, `CODER_MODEL: qwen2.5-coder:7b`, `MAX_AGENTS_PER_PROBLEM: "3"` |
+| Stall detection enabled on Mini | ✅ Done | `STALL_DETECTION_ENABLED: "true"`, `ROUTING_STRATEGY: stall`, `STALL_MIN_TOKENS: "15"` |
+| Proxy Redis escalation telemetry | ✅ Done | `_log_escalation()` — fire-and-forget `oak:telemetry:escalations` + per-problem counters |
+| Total proxy call counter | ✅ Done | `oak:telemetry:total_calls` incremented on every proxy call |
+| `GET /api/telemetry` — aggregated stats | ✅ Done | `api/routers/telemetry.py` — total events, escalation rate, events by type |
+| `POST /api/telemetry` — record agent events | ✅ Done | Inserts into `agent_telemetry` table |
+| `scripts/seed_skills.sql` | ✅ Done | Idempotent INSERT for `event-bus-observer` + `task-state-machine` probationary skills |
+| Proxy escalation unit tests | ✅ Done | `tests/unit/test_proxy_escalation.py` — 3 pass |
+| Telemetry router unit tests | ✅ Done | `tests/unit/test_telemetry.py` — 5 pass |
+| 107 unit + integration + contract tests passing | ✅ Done | `pytest tests/` — 107 passed, 4 skipped (Redis) |
+| Full lifecycle on `OAK_MODE=mini` | ⏳ Needs Mac Mini hardware | Stack not verified on Apple Silicon |
+| Stall escalation rate < 30% | ⏳ Needs live traffic | Requires running Mini stack with real Ollama models |
+
+### Integration Branch
+`feat/phase4-integration` → merged to `main` via fast-forward.
+
+### Remaining Gates
+```bash
+# Start Mini stack (on Mac Mini M4 Pro)
+docker compose -f docker/docker-compose.mini.yml up -d
+
+# Load seed skills into DB
+psql $DATABASE_URL < scripts/seed_skills.sql
+
+# Verify telemetry endpoint
+curl http://localhost:8000/api/telemetry
+
+# Monitor stall escalation rate (target < 30%)
+curl http://localhost:9000/health
+```
+
+---
+
 ## Git Worktree Workflow
 
 OAK uses Git worktrees to isolate concerns. Each worktree is checked out on its own branch.
