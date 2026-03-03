@@ -41,17 +41,17 @@ The proxy routes calls to local Ollama by default (`ROUTING_STRATEGY=passthrough
 
 ### Git Worktree Structure
 
-OAK uses Git worktrees — one per concern, one per problem:
+OAK uses Git worktrees — one per concern, one per problem. See `PROGRESS.md` for full workflow examples.
 
-| Branch | Path | Purpose |
-|---|---|---|
-| `main` | `~/oak/` | Core: Docker, schema DDL, FastAPI, shared libs |
-| `oak/agents` | `~/oak-workspaces/agents/` | Agent definitions, per-agent CLAUDE.md, hooks |
-| `oak/skills` | `~/oak-workspaces/skills/` | Skill library (SKILL.md files + Python modules) |
-| `oak/ui` | `~/oak-workspaces/ui/` | Streamlit Hub |
-| `oak/problem-{uuid}` | `~/oak-workspaces/problem-{uuid}/` | Per-problem isolated workspace (dynamic) |
+| Branch | Worktree path | Concern | Who commits here |
+|---|---|---|---|
+| `main` | `~/oak/` | Core: API, memory, docker, scripts, tests | Feature PRs only — never direct commits |
+| `oak/agents` | `~/oak-workspaces/agents/` | Agent definitions (`.claude/agents/*.md`), hooks | Meta Agent (via PR) |
+| `oak/skills` | `~/oak-workspaces/skills/` | Skill library (`permanent/`, `probationary/`) | Skill Extractor Agent (automated) |
+| `oak/ui` | `~/oak-workspaces/ui/` | Streamlit Hub (`app.py`, `pages/`) | Software Architect (via PR) |
+| `oak/problem-{uuid}` | `~/oak-workspaces/problem-{uuid}/` | Per-problem solution code | Problem agents |
 
-**Never commit directly to `main`, `oak/agents`, `oak/skills`, or `oak/ui`.** Problem code lives on `oak/problem-{uuid}` branches only.
+**Never commit directly to `main`.** Use feature branches + PRs for all core changes. Problem code lives on `oak/problem-{uuid}` branches only.
 
 ---
 
