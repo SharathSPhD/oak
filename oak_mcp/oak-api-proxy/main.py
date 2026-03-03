@@ -8,7 +8,10 @@ __pattern__ = "Strategy"
 import os
 import httpx
 import json
-import redis as _redis_sync
+try:
+    import redis as _redis_sync  # available at runtime inside Docker
+except ImportError:  # pragma: no cover — redis absent only in bare test envs
+    _redis_sync = None  # type: ignore[assignment]
 from fastapi import FastAPI, Request, Response
 from strategies import (
     PassthroughStrategy, StallDetectionStrategy, ConfidenceThresholdStrategy, RoutingStrategy
