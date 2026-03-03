@@ -23,6 +23,8 @@ services:
 
   oak-ui:
     image: oak/ui:latest
+    build:
+      context: ./ui
     restart: unless-stopped
     networks: [oak-net]
     ports:

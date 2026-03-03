@@ -8,7 +8,8 @@ from typing import Any
 
 @dataclass
 class AgentEvent:
-    event_type: str          # tool_called | task_claimed | task_complete | judge_verdict | agent_spawned
+    # tool_called | task_claimed | task_complete | judge_verdict | agent_spawned
+    event_type: str
     agent_id: str
     problem_uuid: str
     payload: dict[str, Any]
@@ -21,27 +22,109 @@ class EventSubscriber(ABC):
 
 
 class TelemetrySubscriber(EventSubscriber):
-    """Writes to agent_telemetry table on every tool_called event."""
+    """Writes to agent_telemetry table on tool_called, task_complete, judge_verdict events."""
 
     async def on_event(self, event: AgentEvent) -> None:
-        # TODO Phase 2: INSERT into agent_telemetry
-        pass
+        valid = ("tool_called", "task_complete", "judge_verdict", "agent_spawned")
+        if event.event_type not in valid:
+            return
+        try:
+            import json as _json
+
+            import asyncpg
+
+            from api.config import settings as _settings
+            conn = await asyncpg.connect(_settings.database_url)
+            try:
+                problem_id = (
+                    event.problem_uuid
+                    if event.problem_uuid not in ("", "unknown")
+                    else None
+                )
+                tool_input = event.payload.get("tool_input")
+                tool_input_json = (
+                    _json.dumps(tool_input) if tool_input else None
+                )
+                await conn.execute(
+                    """INSERT INTO agent_telemetry
+                       (problem_id, agent_id, event_type,
+                        tool_name, tool_input, duration_ms, escalated)
+                       VALUES ($1::uuid, $2, $3, $4,
+                               $5::jsonb, $6, $7)""",
+                    problem_id,
+                    event.agent_id,
+                    event.event_type,
+                    event.payload.get("tool_name"),
+                    tool_input_json,
+                    event.payload.get("duration_ms"),
+                    bool(event.payload.get("escalated", False)),
+                )
+            finally:
+                await conn.close()
+        except Exception:
+            pass  # Never block the producer
 
 
 class WebSocketSubscriber(EventSubscriber):
-    """Publishes to Redis pub/sub channel oak:stream:{problem_uuid}."""
+    """Publishes every event to Redis pub/sub channel oak:stream:{problem_uuid}."""
 
     async def on_event(self, event: AgentEvent) -> None:
-        # TODO Phase 3: PUBLISH to Redis channel
-        pass
+        if event.problem_uuid in ("", "unknown"):
+            return
+        try:
+            import json as _json
+
+            import redis.asyncio as _redis
+
+            from api.config import settings as _settings
+            r = _redis.from_url(_settings.redis_url, decode_responses=True)
+            try:
+                channel = f"oak:stream:{event.problem_uuid}"
+                payload = _json.dumps({
+                    "event_type": event.event_type,
+                    "agent_id": event.agent_id,
+                    "timestamp": event.timestamp_utc,
+                    "payload": event.payload,
+                })
+                await r.publish(channel, payload)
+            finally:
+                await r.aclose()
+        except Exception:
+            pass
 
 
 class EpisodicMemorySubscriber(EventSubscriber):
-    """Writes significant events to episodes table with embedding."""
+    """Writes task_complete and judge_verdict events to episodes table (no embedding yet)."""
 
     async def on_event(self, event: AgentEvent) -> None:
-        # TODO Phase 3: INSERT into episodes with embedding
-        pass
+        if event.event_type not in ("task_complete", "judge_verdict"):
+            return
+        try:
+            import json as _json
+
+            import asyncpg
+
+            from api.config import settings as _settings
+            conn = await asyncpg.connect(_settings.database_url)
+            try:
+                problem_id = (
+                    event.problem_uuid
+                    if event.problem_uuid not in ("", "unknown")
+                    else None
+                )
+                await conn.execute(
+                    """INSERT INTO episodes
+                       (problem_id, agent_id, event_type, content)
+                       VALUES ($1::uuid, $2, $3, $4)""",
+                    problem_id,
+                    event.agent_id,
+                    event.event_type,
+                    _json.dumps(event.payload),
+                )
+            finally:
+                await conn.close()
+        except Exception:
+            pass
 
 
 class SessionStateSubscriber(EventSubscriber):
@@ -49,11 +132,14 @@ class SessionStateSubscriber(EventSubscriber):
 
     async def on_event(self, event: AgentEvent) -> None:
         try:
-            from api.services.agent_registry import AgentRegistry
             from api.config import OAKSettings
+            from api.services.agent_registry import AgentRegistry
             registry = AgentRegistry(str(OAKSettings().redis_url))
             if event.event_type == "agent_spawned":
-                await registry.register(event.agent_id, event.payload.get("role", ""), event.problem_uuid)
+                role = event.payload.get("role", "")
+                await registry.register(
+                    event.agent_id, role, event.problem_uuid,
+                )
             elif event.event_type == "agent_terminated":
                 await registry.update_status(event.agent_id, "terminated")
             elif event.event_type == "tool_called":

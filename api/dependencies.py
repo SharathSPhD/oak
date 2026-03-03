@@ -1,8 +1,14 @@
 __pattern__ = "Repository"
 
 from functools import lru_cache
+
 from api.config import OAKSettings
-from api.events.bus import EventBus, TelemetrySubscriber, WebSocketSubscriber, EpisodicMemorySubscriber
+from api.events.bus import (
+    EpisodicMemorySubscriber,
+    EventBus,
+    TelemetrySubscriber,
+    WebSocketSubscriber,
+)
 
 
 @lru_cache
