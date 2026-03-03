@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from api.config import settings
-from api.routers import problems, tasks, agents, skills, telemetry
+from api.routers import problems, tasks, agents, skills, telemetry, judge
 from api.ws import stream
 from api.dependencies import get_event_bus
 
@@ -20,6 +20,7 @@ app.include_router(tasks.router)
 app.include_router(agents.router)
 app.include_router(skills.router)
 app.include_router(telemetry.router)
+app.include_router(judge.router)
 app.include_router(stream.router)
 
 

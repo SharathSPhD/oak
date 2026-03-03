@@ -128,3 +128,23 @@ class InternalEvent(BaseModel):
     timestamp_utc: float = Field(
         default_factory=lambda: __import__("time").time()
     )
+
+
+# ── Judge ────────────────────────────────────────────────────────────────────
+
+class JudgeVerdictCreate(BaseModel):
+    task_id: UUID
+    verdict: str  # "pass" | "fail"
+    checks: dict[str, Any] = Field(default_factory=dict)
+    notes: str | None = None
+
+
+class JudgeVerdictResponse(BaseModel):
+    id: UUID
+    task_id: UUID
+    verdict: str
+    checks: dict[str, Any]
+    notes: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
