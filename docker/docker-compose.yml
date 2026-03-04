@@ -108,7 +108,7 @@ services:
       META_AGENT_ENABLED: ${META_AGENT_ENABLED:-true}
       OAK_ROOT: ${OAK_ROOT:?Set OAK_ROOT in .env to the host path of the oak repo}
       OAK_WORKSPACE_BASE: ${OAK_WORKSPACE_BASE:?Set OAK_WORKSPACE_BASE in .env}
-      OAK_NETWORK: ${OAK_NETWORK:-oak_oak-net}
+      OAK_NETWORK: ${OAK_NETWORK:-docker_oak-net}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ${OAK_WORKSPACE_BASE}:${OAK_WORKSPACE_BASE}

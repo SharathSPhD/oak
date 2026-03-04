@@ -2,23 +2,27 @@ __pattern__ = "Repository"
 
 from uuid import UUID
 
+from memory.episodic_repository import PostgreSQLEpisodicRepository
 from memory.interfaces import Episode, EpisodicMemoryRepository
 
 
 class PostgresEpisodicMemoryRepository(EpisodicMemoryRepository):
-    """Production: stores episodes in PostgreSQL with pgvector embeddings."""
+    """Production: delegates to PostgreSQLEpisodicRepository (asyncpg + pgvector)."""
 
     def __init__(self, db_url: str) -> None:
         self._db_url = db_url
+        self._delegate = PostgreSQLEpisodicRepository(conn_str=db_url)
 
     async def store(self, episode: Episode) -> UUID:
-        # TODO Phase 3: INSERT into episodes with embedding
-        raise NotImplementedError("Phase 3")
+        return await self._delegate.store(episode)
 
     async def retrieve_similar(self, query_embedding: list[float], top_k: int = 5) -> list[Episode]:
-        # TODO Phase 3: SELECT ... ORDER BY embedding <=> $1 LIMIT top_k
-        raise NotImplementedError("Phase 3")
+        return await self._delegate.retrieve_similar(query_embedding, top_k)
+
+    async def retrieve_global(
+        self, embedding: list[float], limit: int = 10
+    ) -> list[dict[str, object]]:
+        return await self._delegate.retrieve_global(embedding, limit)
 
     async def mark_retrieved(self, episode_id: UUID) -> None:
-        # TODO Phase 3: UPDATE episodes SET retrieved_count = retrieved_count + 1
-        raise NotImplementedError("Phase 3")
+        await self._delegate.mark_retrieved(episode_id)

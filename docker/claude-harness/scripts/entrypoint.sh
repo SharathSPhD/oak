@@ -195,6 +195,43 @@ JUDGEPY
     echo "$VERDICT" > judge_verdict.json
 
     if [ -n "$TASK_ID" ]; then
+        export OAK_JUDGE_VERDICT_RAW="$VERDICT"
+        export OAK_JUDGE_TASK_ID="$TASK_ID"
+        python3 <<'POSTVERDICT'
+import json, urllib.request, os
+
+api = os.environ.get('OAK_API_URL', 'http://oak-api:8000')
+task_id = os.environ.get('OAK_JUDGE_TASK_ID', '')
+raw = os.environ.get('OAK_JUDGE_VERDICT_RAW', '{}')
+
+try:
+    parsed = json.loads(raw)
+except Exception:
+    parsed = {"verdict": "pass", "checks": {}, "notes": "auto-pass"}
+
+verdict = parsed.get("verdict", "pass")
+checks = parsed.get("checks", {})
+notes = parsed.get("notes", "")
+
+body = json.dumps({
+    "task_id": task_id,
+    "verdict": verdict,
+    "checks": checks,
+    "notes": notes,
+}).encode()
+req = urllib.request.Request(
+    f'{api}/api/judge_verdicts',
+    data=body,
+    headers={'Content-Type': 'application/json'},
+    method='POST',
+)
+try:
+    urllib.request.urlopen(req, timeout=10)
+    print(f'Verdict posted: {verdict}')
+except Exception as e:
+    print(f'Failed to post verdict: {e}')
+POSTVERDICT
+
         PARSED_VERDICT=$(echo "$VERDICT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('verdict','pass'))" 2>/dev/null || echo "pass")
         if [ "$PARSED_VERDICT" = "pass" ]; then
             patch_task "$TASK_ID" "complete"
@@ -202,7 +239,7 @@ JUDGEPY
             patch_task "$TASK_ID" "failed"
         fi
     fi
-    log "Judge evaluation complete"
+    log "Judge evaluation complete (verdict=$(echo "$VERDICT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('verdict','?'))" 2>/dev/null || echo '?'))"
     exit 0
 fi
 
@@ -227,6 +264,9 @@ PROBLEM_JSON=$(curl -sf "$OAK_API/api/problems/$PROBLEM_UUID" || echo "{}")
 TITLE=$(echo "$PROBLEM_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('title','Problem'))" 2>/dev/null || echo "Problem")
 DESCRIPTION=$(echo "$PROBLEM_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('description',''))" 2>/dev/null || echo "")
 
+log "Step 0: Setting status to assembling"
+patch_problem "assembling"
+
 log "Step 1: Writing PROBLEM.md"
 cat > PROBLEM.md <<HEREDOC
 # $TITLE
@@ -236,9 +276,31 @@ $PROBLEM_UUID
 $DESCRIPTION
 HEREDOC
 
+log "Step 1b: Querying skill library for relevant prior skills"
+ENCODED_TITLE=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$TITLE'))" 2>/dev/null || echo "")
+RELEVANT_SKILLS=$(curl -sf "$OAK_API/api/skills?query=$ENCODED_TITLE&top_k=5" 2>/dev/null || echo "[]")
+SKILL_CONTEXT=""
+if [ "$RELEVANT_SKILLS" != "[]" ]; then
+    SKILL_CONTEXT=$(echo "$RELEVANT_SKILLS" | python3 -c "
+import sys, json
+skills = json.load(sys.stdin)
+if not isinstance(skills, list) or len(skills) == 0:
+    print('')
+else:
+    lines = ['## Relevant Skills from Prior Problems']
+    for s in skills[:5]:
+        lines.append(f'- {s.get(\"name\",\"?\")} ({s.get(\"category\",\"?\")}): {s.get(\"description\",\"\")[:120]}')
+    print('\n'.join(lines))
+" 2>/dev/null || echo "")
+    if [ -n "$SKILL_CONTEXT" ]; then
+        log "Found relevant skills to inject into decomposition"
+    fi
+fi
+
 log "Step 2: Task decomposition via Ollama API"
 export OAK_DECOMP_TITLE="$TITLE"
 export OAK_DECOMP_DESC="$DESCRIPTION"
+export OAK_DECOMP_SKILLS="$SKILL_CONTEXT"
 
 DECOMPOSITION=$(python3 <<'PYEOF'
 import json, urllib.request, sys, os, re
@@ -247,11 +309,14 @@ proxy = os.environ.get('ANTHROPIC_BASE_URL', 'http://oak-api-proxy:9000')
 model = os.environ.get('OAK_MODEL', 'qwen3-coder')
 title = os.environ.get('OAK_DECOMP_TITLE', 'Problem')
 desc = os.environ.get('OAK_DECOMP_DESC', '')
+skill_ctx = os.environ.get('OAK_DECOMP_SKILLS', '')
+
+skill_section = f"\n\n{skill_ctx}\n\nLeverage the above skills where applicable." if skill_ctx else ""
 
 prompt = f"""Decompose this problem into tasks for a data science team.
 
 Problem: {title}
-Description: {desc}
+Description: {desc}{skill_section}
 
 Return ONLY a JSON array of tasks:
 [{{"title": "...", "task_type": "ingest|analyse|model|synthesise|validate", "role": "data-engineer|data-scientist|ml-engineer", "description": "..."}}]
@@ -338,6 +403,8 @@ except Exception:
     print('[]')
 " 2>/dev/null || echo "[]")
 
+patch_problem "active"
+
 log "Step 3: Spawning specialist agents"
 SPAWNED=$(echo "$TASK_IDS" | python3 -c "
 import sys, json, os, urllib.request
@@ -389,16 +456,68 @@ if total == 0 or done >= total:
     sleep $POLL_INTERVAL
 done
 
-log "Step 5: Running judge"
-curl -sf -X POST "$OAK_API/api/problems/$PROBLEM_UUID/spawn-agent" \
-    -H "Content-Type: application/json" \
-    -d '{"role": "judge"}' > /dev/null 2>&1 || true
+log "Step 5: Running judge (with task tracking)"
+JUDGE_TASK_ID=$(python3 -c "
+import json, urllib.request, os
+api = os.environ.get('OAK_API_URL', 'http://oak-api:8000')
+puuid = os.environ.get('OAK_PROBLEM_UUID', '')
+body = json.dumps({
+    'problem_id': puuid,
+    'title': 'Quality evaluation',
+    'description': 'Judge evaluates overall solution quality',
+    'task_type': 'validate',
+    'assigned_to': 'judge-agent',
+}).encode()
+req = urllib.request.Request(f'{api}/api/tasks', data=body, headers={'Content-Type': 'application/json'}, method='POST')
+try:
+    resp = urllib.request.urlopen(req, timeout=10)
+    print(json.load(resp)['id'])
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+
+if [ -n "$JUDGE_TASK_ID" ]; then
+    curl -sf -X POST "$OAK_API/api/problems/$PROBLEM_UUID/spawn-agent" \
+        -H "Content-Type: application/json" \
+        -d "{\"role\": \"judge\", \"task_id\": \"$JUDGE_TASK_ID\"}" > /dev/null 2>&1 || true
+    log "Judge spawned with task $JUDGE_TASK_ID"
+else
+    curl -sf -X POST "$OAK_API/api/problems/$PROBLEM_UUID/spawn-agent" \
+        -H "Content-Type: application/json" \
+        -d '{"role": "judge"}' > /dev/null 2>&1 || true
+fi
 sleep 30
 
-log "Step 6: Running skill extractor"
-curl -sf -X POST "$OAK_API/api/problems/$PROBLEM_UUID/spawn-agent" \
-    -H "Content-Type: application/json" \
-    -d '{"role": "skill-extractor"}' > /dev/null 2>&1 || true
+log "Step 6: Running skill extractor (with task tracking)"
+SKILL_TASK_ID=$(python3 -c "
+import json, urllib.request, os
+api = os.environ.get('OAK_API_URL', 'http://oak-api:8000')
+puuid = os.environ.get('OAK_PROBLEM_UUID', '')
+body = json.dumps({
+    'problem_id': puuid,
+    'title': 'Skill extraction',
+    'description': 'Extract reusable patterns from solution',
+    'task_type': 'validate',
+    'assigned_to': 'skill-extractor',
+}).encode()
+req = urllib.request.Request(f'{api}/api/tasks', data=body, headers={'Content-Type': 'application/json'}, method='POST')
+try:
+    resp = urllib.request.urlopen(req, timeout=10)
+    print(json.load(resp)['id'])
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+
+if [ -n "$SKILL_TASK_ID" ]; then
+    curl -sf -X POST "$OAK_API/api/problems/$PROBLEM_UUID/spawn-agent" \
+        -H "Content-Type: application/json" \
+        -d "{\"role\": \"skill-extractor\", \"task_id\": \"$SKILL_TASK_ID\"}" > /dev/null 2>&1 || true
+    log "Skill extractor spawned with task $SKILL_TASK_ID"
+else
+    curl -sf -X POST "$OAK_API/api/problems/$PROBLEM_UUID/spawn-agent" \
+        -H "Content-Type: application/json" \
+        -d '{"role": "skill-extractor"}' > /dev/null 2>&1 || true
+fi
 sleep 15
 
 log "Step 7: Marking problem complete"

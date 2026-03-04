@@ -54,6 +54,10 @@ class OAKSettings(BaseSettings):
     max_concurrent_problems: int  = 3
     max_harness_containers: int   = 20
 
+    # -- Embeddings ---------------------------------------------------------------
+    embed_model: str = "nomic-embed-text"
+    embed_dim: int = 768
+
     # -- Memory -------------------------------------------------------------------
     database_url: str                 = "postgresql://oak:oak@oak-postgres:5432/oak"
     redis_url: str                    = "redis://oak-redis:6379"

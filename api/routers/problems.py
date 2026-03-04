@@ -2,6 +2,7 @@ __pattern__ = "Repository"
 
 import asyncio
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -33,8 +34,17 @@ async def create_problem(
     body: ProblemCreate,
     db: AsyncSession = Depends(get_db),
     bus: EventBus = Depends(get_event_bus),
+    settings: OAKSettings = Depends(get_settings),
 ) -> ProblemResponse:
     """Create a new problem. Returns 429 if MAX_CONCURRENT_PROBLEMS exceeded."""
+    active_count = await db.execute(
+        text("SELECT count(*) FROM problems WHERE status IN ('active', 'assembling')"),
+    )
+    if active_count.scalar_one() >= settings.max_concurrent_problems:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Max concurrent problems ({settings.max_concurrent_problems}) exceeded",
+        )
     problem_id = uuid4()
     result = await db.execute(
         text("""
@@ -383,6 +393,7 @@ async def update_problem_status(
 async def delete_problem(
     problem_id: UUID,
     db: AsyncSession = Depends(get_db),
+    settings: OAKSettings = Depends(get_settings),
 ) -> None:
     """Hard-delete a problem and stop its harness container if running."""
     result = await db.execute(
@@ -401,6 +412,23 @@ async def delete_problem(
         await proc.communicate()
     except Exception:
         pass
+
+    workspace_path = f"{settings.oak_workspace_base}/problem-{problem_id}"
+    try:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", workspace_path],
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        pass
+    try:
+        subprocess.run(
+            ["git", "branch", "-D", f"oak/problem-{problem_id}"],
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        pass
+    shutil.rmtree(workspace_path, ignore_errors=True)
 
     await db.execute(text("DELETE FROM tasks WHERE problem_id = :id"), {"id": str(problem_id)})
     await db.execute(text("DELETE FROM mailbox WHERE problem_id = :id"), {"id": str(problem_id)})

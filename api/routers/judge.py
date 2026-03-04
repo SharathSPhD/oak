@@ -27,7 +27,7 @@ async def submit_verdict(
     result = await db.execute(
         text("""
             INSERT INTO judge_verdicts (id, task_id, verdict, checks, notes)
-            VALUES (:id, :task_id, :verdict, :checks::jsonb, :notes)
+            VALUES (:id, :task_id, :verdict, CAST(:checks AS jsonb), :notes)
             RETURNING id, task_id, verdict, checks, notes, created_at
         """),
         {

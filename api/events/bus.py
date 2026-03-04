@@ -100,11 +100,13 @@ class EpisodicMemorySubscriber(EventSubscriber):
     async def _generate_embedding(text: str) -> list[float] | None:
         """Generate embedding via Ollama. Returns None on failure (non-blocking)."""
         import httpx
+
+        from api.config import settings as _embed_settings
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(
                     "http://oak-ollama:11434/api/embeddings",
-                    json={"model": "nomic-embed-text", "prompt": text[:8000]},
+                    json={"model": _embed_settings.embed_model, "prompt": text[:8000]},
                 )
                 if resp.status_code == 200:
                     data: dict[str, object] = resp.json()
