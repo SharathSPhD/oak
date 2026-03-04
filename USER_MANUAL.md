@@ -2,7 +2,7 @@
 
 ## The Open Agent Knowledge-Factory
 
-**Version 1.0** | DGX Spark Edition | March 2026
+**Version 1.1** | DGX Spark Edition | March 2026
 
 ---
 
@@ -21,6 +21,7 @@
 11. [API Reference](#105-api-reference)
 12. [Troubleshooting](#11-troubleshooting)
 13. [Advanced: Skill Library](#12-advanced-skill-library)
+14. [Streamlit Cloud Deployment](#14-streamlit-cloud-deployment-optional)
 
 ---
 
@@ -128,10 +129,14 @@ The bootstrap script:
 
 ```bash
 # From ~/oak, just bring up the stack (images already built)
-docker compose -f docker/docker-compose.dgx.yml up -d
+# DGX Spark — primary (unified compose with profile)
+docker compose -f docker/docker-compose.yml --profile dgx up -d
 
-# Or on Mac Mini
-docker compose -f docker/docker-compose.mini.yml up -d
+# Mac Mini M4
+docker compose -f docker/docker-compose.yml --profile mini up -d
+
+# Cloud GPU (vLLM backend)
+docker compose -f docker/docker-compose.yml --profile cloud up -d
 
 # Watch logs in real-time
 docker compose logs -f oak-api
@@ -147,7 +152,7 @@ After `bootstrap.sh` completes, verify all 6 services:
 
 ```bash
 # Check service health
-docker compose -f docker/docker-compose.dgx.yml ps
+docker compose -f docker/docker-compose.yml --profile dgx ps
 
 # Expected output:
 # NAME             STATUS
@@ -1007,15 +1012,21 @@ Response:
   "status": "healthy",
   "oak_mode": "dgx",
   "routing_strategy": "passthrough",
-  "api_key_present": false,
-  "feature_flags": {
-    "stall_detection_enabled": true,
-    "escalation_enabled": false
-  },
+  "stall_detection_enabled": false,
+  "max_agents_per_problem": 10,
+  "max_concurrent_problems": 3,
   "models": {
     "default": "llama3.3:70b",
-    "coder": "qwen3-coder:latest"
-  }
+    "coder": "qwen3-coder",
+    "analysis": "glm-4.7"
+  },
+  "feature_flags": {
+    "telemetry_enabled": true,
+    "skill_extraction_enabled": true,
+    "judge_required": true,
+    "meta_agent_enabled": false
+  },
+  "api_key_present": false
 }
 ```
 
@@ -1095,7 +1106,40 @@ curl -X POST http://localhost:8000/api/agents/spawn \
 {
   "agent_id": "data-scientist-f47ac10b",
   "container_id": "xyz789uvw012",
-  "role": "data-scientist"
+  "role": "data-scientist",
+  "model": "glm-4.7"
+}
+```
+
+---
+
+#### GET /api/agents/models
+
+Returns the model routing table — which Ollama model each agent role uses.
+
+```bash
+curl http://localhost:8000/api/agents/models
+```
+
+Response:
+```json
+{
+  "models": {
+    "default": "llama3.3:70b",
+    "coder": "qwen3-coder",
+    "analysis": "glm-4.7",
+    "reasoning": "llama3.3:70b"
+  },
+  "role_routing": {
+    "data-engineer": "qwen3-coder",
+    "ml-engineer": "qwen3-coder",
+    "data-scientist": "glm-4.7",
+    "skill-extractor": "glm-4.7",
+    "orchestrator": "llama3.3:70b",
+    "judge-agent": "llama3.3:70b",
+    "meta-agent": "llama3.3:70b",
+    "software-architect": "llama3.3:70b"
+  }
 }
 ```
 
@@ -1366,7 +1410,7 @@ curl -X POST http://localhost:8000/api/telemetry \
 
 ```bash
 # See all containers
-docker compose -f docker/docker-compose.dgx.yml ps
+docker compose -f docker/docker-compose.yml --profile dgx ps
 
 # If any are down, bring them up
 docker compose -f docker/docker-compose.dgx.yml up -d
@@ -1431,7 +1475,7 @@ docker exec oak-ollama ollama pull llama3.3:70b
 **Check:** Did bootstrap complete?
 
 ```bash
-docker compose -f docker/docker-compose.dgx.yml ps oak-postgres
+docker compose -f docker/docker-compose.yml --profile dgx ps oak-postgres
 # Should show: Up (healthy)
 
 # Check logs
@@ -1743,4 +1787,38 @@ ANTHROPIC_API_KEY_REAL=sk-...  # Real key for escalation
 
 ---
 
-**OAK v1.0** | Built for DGX Spark | March 2026
+---
+
+## 14. Streamlit Cloud Deployment (Optional)
+
+The OAK Hub can be deployed to [Streamlit Cloud](https://streamlit.io/cloud) as a read-only frontend while the DGX stack continues running locally.
+
+### Setup
+
+1. **Create `.streamlit/secrets.toml`** (gitignored — never commit):
+   ```toml
+   OAK_API_URL = "https://your-dgx-tunnel.example.com"
+   ```
+
+2. **Deploy to Streamlit Cloud:**
+   - Connect your GitHub repo (`SharathSPhD/oak`)
+   - Set the app entrypoint to `ui/app.py`
+   - Add `OAK_API_URL` as a secret in the Streamlit Cloud dashboard
+
+3. **The Hub UI** (`ui/app.py` + `ui/pages/01_submit.py`) consumes the OAK REST API at `OAK_API_URL` — it holds no data or agent logic.
+
+### Meta Agent (Advanced)
+
+The Meta Agent evolves agent prompts by analysing failure patterns. It's **disabled by default**.
+
+To enable:
+```bash
+# In .env or docker-compose override
+META_AGENT_ENABLED=true
+```
+
+When enabled, the Meta Agent runs on schedule (daily or after every 10 problems), reads `agent_telemetry`, and opens PRs against `oak/agents` branch with prompt amendments. All PRs require human merge.
+
+---
+
+**OAK v1.1** | Built for DGX Spark | March 2026
