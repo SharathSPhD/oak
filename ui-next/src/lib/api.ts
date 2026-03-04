@@ -1,9 +1,7 @@
 const API_BASE =
   typeof window !== "undefined"
-    ? (window as unknown as { __OAK_API_URL__?: string }).__OAK_API_URL__ ||
-      process.env.NEXT_PUBLIC_API_URL ||
-      "http://localhost:8000"
-    : process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    ? "/oak-api"
+    : process.env.API_BACKEND_URL || "http://oak-api:8000";
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -181,6 +179,9 @@ export const api = {
 };
 
 export function wsUrl(problemId: string): string {
-  const base = API_BASE.replace(/^http/, "ws");
-  return `${base}/ws/${problemId}`;
+  if (typeof window !== "undefined") {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${window.location.hostname}:8000/ws/${problemId}`;
+  }
+  return `ws://oak-api:8000/ws/${problemId}`;
 }

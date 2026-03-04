@@ -115,13 +115,9 @@ trigger_meta_agent() {
     fi
 
     local meta_enabled
-    meta_enabled=$(echo "$health_data" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d.get('feature_flags', {}).get('meta_agent_enabled', False))
-" 2>/dev/null || echo "False")
+    meta_enabled=$(echo "$health_data" | jq -r '.feature_flags.meta_agent_enabled // false' 2>/dev/null)
 
-    if [ "$meta_enabled" != "True" ]; then
+    if [ "$meta_enabled" != "true" ]; then
         log "META: Disabled via feature flag"
         return
     fi

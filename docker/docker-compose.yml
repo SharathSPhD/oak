@@ -151,7 +151,7 @@ services:
     ports:
       - "8501:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://oak-api:8000
+      API_BACKEND_URL: http://oak-api:8000
     depends_on:
       - oak-api
     profiles: ["dgx"]
@@ -233,7 +233,7 @@ services:
     ports:
       - "8501:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://oak-api-mini:8000
+      API_BACKEND_URL: http://oak-api-mini:8000
     depends_on:
       - oak-api-mini
     profiles: ["mini"]
@@ -316,7 +316,7 @@ services:
     ports:
       - "8501:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://oak-api-cloud:8000
+      API_BACKEND_URL: http://oak-api-cloud:8000
     depends_on:
       - oak-api-cloud
     profiles: ["cloud"]
