@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -258,6 +259,22 @@ async def list_workspace_files(
                 "size": f.stat().st_size,
             })
     return {"files": files, "workspace": str(workspace_path)}
+
+
+@router.get("/{problem_id}/files/{filename:path}")
+async def get_file_content(
+    problem_id: UUID,
+    filename: str,
+    settings: OAKSettings = Depends(get_settings),
+) -> FileResponse:
+    """Serve a file from the problem workspace (markdown, images, code, etc)."""
+    workspace = Path(f"{settings.oak_workspace_base}/problem-{problem_id}")
+    filepath = (workspace / filename).resolve()
+    if not str(filepath).startswith(str(workspace.resolve())):
+        raise HTTPException(status_code=403, detail="Path traversal not allowed")
+    if not filepath.exists() or not filepath.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(filepath)
 
 
 @router.patch("/{problem_id}", response_model=ProblemResponse)

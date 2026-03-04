@@ -147,6 +147,8 @@ export const api = {
       apiFetch<{ files: WorkspaceFile[]; workspace: string }>(
         `/api/problems/${id}/files`
       ),
+    fileUrl: (id: string, filename: string) =>
+      `${API_BASE}/api/problems/${id}/files/${encodeURIComponent(filename)}`,
   },
 
   tasks: {

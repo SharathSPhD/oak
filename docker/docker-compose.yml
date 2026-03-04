@@ -96,7 +96,7 @@ services:
   oak-api:
     image: oak/api:latest
     build:
-      context: .
+      context: ..
       dockerfile: docker/api/Dockerfile
     restart: unless-stopped
     networks: [oak-net]
@@ -128,7 +128,7 @@ services:
   oak-api-proxy:
     image: oak/api-proxy:latest
     build:
-      context: ./oak_mcp/oak-api-proxy
+      context: ../oak_mcp/oak-api-proxy
     restart: unless-stopped
     networks: [oak-net]
     ports:
@@ -145,7 +145,7 @@ services:
   oak-ui:
     image: oak/ui:latest
     build:
-      context: ./ui-next
+      context: ../ui-next
     restart: unless-stopped
     networks: [oak-net]
     ports:
@@ -176,7 +176,7 @@ services:
   oak-api-mini:
     image: oak/api:latest
     build:
-      context: .
+      context: ..
       dockerfile: docker/api/Dockerfile
     restart: unless-stopped
     networks:
@@ -210,7 +210,7 @@ services:
   oak-api-proxy-mini:
     image: oak/api-proxy:latest
     build:
-      context: ./oak_mcp/oak-api-proxy
+      context: ../oak_mcp/oak-api-proxy
     restart: unless-stopped
     networks: [oak-net]
     ports:
@@ -229,7 +229,7 @@ services:
   oak-ui-mini:
     image: oak/ui:latest
     build:
-      context: ./ui-next
+      context: ../ui-next
     restart: unless-stopped
     networks: [oak-net]
     ports:
@@ -263,7 +263,7 @@ services:
   oak-api-cloud:
     image: oak/api:latest
     build:
-      context: .
+      context: ..
       dockerfile: docker/api/Dockerfile
     restart: unless-stopped
     networks:
@@ -298,7 +298,7 @@ services:
   oak-api-proxy-cloud:
     image: oak/api-proxy:latest
     build:
-      context: ./oak_mcp/oak-api-proxy
+      context: ../oak_mcp/oak-api-proxy
     restart: unless-stopped
     networks: [oak-net]
     ports:
@@ -314,7 +314,7 @@ services:
   oak-ui-cloud:
     image: oak/ui:latest
     build:
-      context: ./ui-next
+      context: ../ui-next
     restart: unless-stopped
     networks: [oak-net]
     ports:
@@ -332,7 +332,7 @@ services:
   oak-daemon:
     image: oak/daemon:latest
     build:
-      context: .
+      context: ..
       dockerfile: docker/daemon/Dockerfile
     restart: unless-stopped
     networks: [oak-net]

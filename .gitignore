@@ -50,3 +50,10 @@ Thumbs.db
 docs/
 .serena/
 PROGRESS.md
+
+# React/Next.js build artifacts
+ui-next/.next/
+ui-next/node_modules/
+
+# Demo artifacts
+demo_video/
