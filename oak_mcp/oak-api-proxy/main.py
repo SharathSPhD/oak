@@ -103,6 +103,41 @@ def _log_call() -> None:
 # Anthropic ↔ OpenAI format conversion helpers
 # ---------------------------------------------------------------------------
 
+import re as _re
+
+
+def _parse_xml_tool_calls(text: str) -> list[dict]:
+    """Parse qwen3-coder XML-format tool calls from text content.
+
+    Models like qwen3-coder fall back to text-format function calls when given
+    many tools, using: <function=Name><parameter=key>value</parameter>...</function>
+
+    Returns list of Anthropic tool_use dicts, or [] if no XML calls found.
+    """
+    calls = []
+    # Match <function=ToolName>...</function> blocks (greedy but contained)
+    fn_pattern = _re.compile(
+        r"<function=(\w+)>(.*?)</function>", _re.DOTALL
+    )
+    for m in fn_pattern.finditer(text):
+        name = m.group(1)
+        body = m.group(2)
+        # Extract <parameter=key>value</parameter> pairs
+        param_pattern = _re.compile(
+            r"<parameter=(\w+)>\s*(.*?)\s*</parameter>", _re.DOTALL
+        )
+        tool_input: dict = {}
+        for pm in param_pattern.finditer(body):
+            tool_input[pm.group(1)] = pm.group(2).strip()
+        calls.append({
+            "type": "tool_use",
+            "id": f"toolu_{uuid.uuid4().hex[:8]}",
+            "name": name,
+            "input": tool_input,
+        })
+    return calls
+
+
 def _anthropic_to_openai_request(data: dict) -> dict:
     """Convert Anthropic /v1/messages request body to OpenAI /v1/chat/completions."""
     messages: list[dict] = []
@@ -195,12 +230,19 @@ def _openai_to_anthropic_response(oai_resp: dict, original_model: str) -> dict:
                 "input": tool_input,
             })
 
+    # Detect XML-format tool calls in text (fallback for models with many tools)
+    if not content_blocks and content_text and "<function=" in content_text:
+        xml_calls = _parse_xml_tool_calls(content_text)
+        if xml_calls:
+            content_blocks.extend(xml_calls)
+            content_text = ""  # suppress text block; only emit tool_use
+
     if content_text:
         content_blocks.append({"type": "text", "text": content_text})
 
     finish_reason = choice.get("finish_reason", "stop")
     stop_reason = "end_turn"
-    if finish_reason == "tool_calls":
+    if finish_reason == "tool_calls" or any(b.get("type") == "tool_use" for b in content_blocks):
         stop_reason = "tool_use"
     elif finish_reason == "length":
         stop_reason = "max_tokens"
@@ -237,8 +279,8 @@ async def _stream_anthropic(
     yield f"event: ping\ndata: {json.dumps({'type': 'ping'})}\n\n"
 
     # Track open content blocks
-    text_block_index: int | None = None  # Separate index tracking for text block
-    text_block_opened = False
+    text_block_index: int | None = None  # Index of text block if emitted at finish
+    text_buffer: list[str] = []  # Buffer all text; emit as text or XML tool calls at finish
     # tool_call_index → anthropic_block_index
     tool_block_map: dict[int, int] = {}
     next_block_index = 0
@@ -261,18 +303,13 @@ async def _stream_anthropic(
                 choice = (chunk.get("choices") or [{}])[0]
                 delta = choice.get("delta", {})
 
-                # ── Text content ──────────────────────────────────────────
+                # ── Text content (buffer; emit only if no XML tool calls found later)
                 text = delta.get("content") or ""
                 if text:
-                    if not text_block_opened:
-                        text_block_index = next_block_index
-                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': text_block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"  # noqa: E501
-                        text_block_opened = True
-                        next_block_index += 1
+                    text_buffer.append(text)
                     output_tokens += 1
-                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': text_block_index, 'delta': {'type': 'text_delta', 'text': text}})}\n\n"  # noqa: E501
 
-                # ── Tool calls ────────────────────────────────────────────
+                # ── Tool calls (OpenAI structured format) ─────────────────
                 for tc_delta in delta.get("tool_calls") or []:
                     tc_idx = tc_delta.get("index", 0)
                     fn = tc_delta.get("function", {})
@@ -299,22 +336,62 @@ async def _stream_anthropic(
                     elif finish == "length":
                         stop_reason = "max_tokens"
 
-                    # Close all open blocks (use distinct indices, deduplicated)
-                    text_indices = ([text_block_index] if text_block_opened and text_block_index is not None else [])
-                    all_blocks = sorted(set(text_indices + list(tool_block_map.values())))
-                    for bi in all_blocks:
-                        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': bi})}\n\n"
+                    full_text = "".join(text_buffer)
+
+                    # Detect XML-format tool calls (<function=Name>...) from models
+                    # that fall back to text-based function calling with many tools
+                    xml_calls = []
+                    if not tool_block_map and "<function=" in full_text:
+                        xml_calls = _parse_xml_tool_calls(full_text)
+
+                    if xml_calls:
+                        # Emit XML tool calls as proper tool_use blocks
+                        stop_reason = "tool_use"
+                        for tc in xml_calls:
+                            bi = next_block_index
+                            next_block_index += 1
+                            yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': bi, 'content_block': {'type': 'tool_use', 'id': tc['id'], 'name': tc['name'], 'input': {}}})}\n\n"  # noqa: E501
+                            args_json = json.dumps(tc["input"])
+                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': bi, 'delta': {'type': 'input_json_delta', 'partial_json': args_json}})}\n\n"  # noqa: E501
+                            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': bi})}\n\n"
+                    else:
+                        # Emit buffered text as text block
+                        if full_text:
+                            text_block_index = next_block_index
+                            yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': text_block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"  # noqa: E501
+                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': text_block_index, 'delta': {'type': 'text_delta', 'text': full_text}})}\n\n"  # noqa: E501
+                            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': text_block_index})}\n\n"  # noqa: E501
+                            next_block_index += 1
+
+                        # Close structured tool_call blocks (text block already closed above)
+                        for bi in sorted(tool_block_map.values()):
+                            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': bi})}\n\n"
 
                     yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': stop_reason, 'stop_sequence': None}, 'usage': {'output_tokens': output_tokens}})}\n\n"  # noqa: E501
                     yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
                     return
 
-    # Fallback stop
-    if text_block_opened and text_block_index is not None:
-        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': text_block_index})}\n\n"
-    for bi in sorted(tool_block_map.values()):
-        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': bi})}\n\n"
-    yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': output_tokens}})}\n\n"
+    # Fallback stop (stream ended without finish_reason chunk)
+    full_text = "".join(text_buffer)
+    xml_calls = _parse_xml_tool_calls(full_text) if (not tool_block_map and "<function=" in full_text) else []
+    if xml_calls:
+        stop_reason = "tool_use"
+        for tc in xml_calls:
+            bi = next_block_index
+            next_block_index += 1
+            yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': bi, 'content_block': {'type': 'tool_use', 'id': tc['id'], 'name': tc['name'], 'input': {}}})}\n\n"  # noqa: E501
+            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': bi, 'delta': {'type': 'input_json_delta', 'partial_json': json.dumps(tc['input'])}})}\n\n"  # noqa: E501
+            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': bi})}\n\n"
+    else:
+        stop_reason = "end_turn"
+        if full_text:
+            text_block_index = next_block_index
+            yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': text_block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"  # noqa: E501
+            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': text_block_index, 'delta': {'type': 'text_delta', 'text': full_text}})}\n\n"  # noqa: E501
+            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': text_block_index})}\n\n"  # noqa: E501
+        for bi in sorted(tool_block_map.values()):
+            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': bi})}\n\n"
+    yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': stop_reason, 'stop_sequence': None}, 'usage': {'output_tokens': output_tokens}})}\n\n"  # noqa: E501
     yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
 
 
@@ -348,6 +425,16 @@ async def messages(request: Request) -> Response:
     data = json.loads(body) if body else {}
     original_model = data.get("model", "claude-sonnet-4-6")
     is_stream = data.get("stream", False)
+
+    # DEBUG: log tools and last message to stderr
+    import sys as _sys
+    tools_names = [t.get("name") for t in data.get("tools", [])]
+    last_msg = (data.get("messages") or [{}])[-1]
+    last_role = last_msg.get("role", "?")
+    last_content = last_msg.get("content", "")
+    if isinstance(last_content, list):
+        last_content = str([b.get("type") for b in last_content])
+    print(f"[proxy-debug] stream={is_stream} tools={tools_names} last_role={last_role} content_preview={str(last_content)[:80]}", file=_sys.stderr, flush=True)
 
     oai_body = _anthropic_to_openai_request(data)
     ollama_url = f"{OLLAMA_BASE_URL}/v1/chat/completions"
