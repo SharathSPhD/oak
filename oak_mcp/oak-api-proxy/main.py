@@ -236,7 +236,8 @@ async def _stream_anthropic(
     yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': msg_id, 'type': 'message', 'role': 'assistant', 'content': [], 'model': original_model, 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}})}\n\n"  # noqa: E501
     yield f"event: ping\ndata: {json.dumps({'type': 'ping'})}\n\n"
 
-    # Track open content blocks: index → type ('text' | 'tool_use')
+    # Track open content blocks
+    text_block_index: int | None = None  # Separate index tracking for text block
     text_block_opened = False
     # tool_call_index → anthropic_block_index
     tool_block_map: dict[int, int] = {}
@@ -264,12 +265,12 @@ async def _stream_anthropic(
                 text = delta.get("content") or ""
                 if text:
                     if not text_block_opened:
-                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': next_block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"  # noqa: E501
+                        text_block_index = next_block_index
+                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': text_block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"  # noqa: E501
                         text_block_opened = True
                         next_block_index += 1
                     output_tokens += 1
-                    bi = next_block_index - 1
-                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': bi, 'delta': {'type': 'text_delta', 'text': text}})}\n\n"  # noqa: E501
+                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': text_block_index, 'delta': {'type': 'text_delta', 'text': text}})}\n\n"  # noqa: E501
 
                 # ── Tool calls ────────────────────────────────────────────
                 for tc_delta in delta.get("tool_calls") or []:
@@ -298,11 +299,9 @@ async def _stream_anthropic(
                     elif finish == "length":
                         stop_reason = "max_tokens"
 
-                    # Close all open blocks
-                    all_blocks = sorted(
-                        (([next_block_index - 1] if text_block_opened else []) +
-                         list(tool_block_map.values())),
-                    )
+                    # Close all open blocks (use distinct indices, deduplicated)
+                    text_indices = ([text_block_index] if text_block_opened and text_block_index is not None else [])
+                    all_blocks = sorted(set(text_indices + list(tool_block_map.values())))
                     for bi in all_blocks:
                         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': bi})}\n\n"
 
@@ -311,8 +310,10 @@ async def _stream_anthropic(
                     return
 
     # Fallback stop
-    if text_block_opened:
-        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': next_block_index - 1})}\n\n"
+    if text_block_opened and text_block_index is not None:
+        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': text_block_index})}\n\n"
+    for bi in sorted(tool_block_map.values()):
+        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': bi})}\n\n"
     yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': output_tokens}})}\n\n"
     yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
 
