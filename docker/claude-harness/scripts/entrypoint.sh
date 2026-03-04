@@ -54,7 +54,7 @@ $TELEMETRY
 \`\`\`
 METAEOF
 
-    claude --dangerously-skip-permissions --model "$MODEL" -p \
+    claude --dangerously-skip-permissions --model "$MODEL" --max-turns 3 -p \
       "You are the OAK Meta Agent. Analyze META_CONTEXT.md and produce meta_proposals.json with improvement proposals. Output ONLY valid JSON." \
       > meta_proposals.json 2>/dev/null || true
 
@@ -109,7 +109,7 @@ ${TASK_DESC}
 - If code is needed, write complete runnable Python scripts
 - Save all outputs to the current directory"
 
-    claude --dangerously-skip-permissions --model "$MODEL" -p "$PROMPT" > /dev/null 2>&1 || true
+    claude --dangerously-skip-permissions --model "$MODEL" --max-turns 15 -p "$PROMPT" > /dev/null 2>&1 || true
 
     if [ -n "$TASK_ID" ]; then
         patch_task "$TASK_ID" "complete"
@@ -131,11 +131,18 @@ $(head -100 "$f" 2>/dev/null || true)
 "
     done
 
-    VERDICT=$(claude --dangerously-skip-permissions --model "$MODEL" -p \
-      "You are the OAK Judge Agent. Evaluate the solution quality.
+    export OAK_JUDGE_CONTEXT="$CONTEXT"
+    VERDICT=$(python3 <<'JUDGEPY'
+import json, urllib.request, sys, os, re
+
+proxy = os.environ.get('ANTHROPIC_BASE_URL', 'http://oak-api-proxy:9000')
+model = os.environ.get('OAK_MODEL', 'qwen3-coder')
+context = os.environ.get('OAK_JUDGE_CONTEXT', 'No files found')
+
+prompt = f"""You are the OAK Judge Agent. Evaluate the solution quality.
 
 Workspace files:
-$CONTEXT
+{context}
 
 Evaluate:
 1. Does the solution address the problem?
@@ -144,9 +151,46 @@ Evaluate:
 4. Is there evidence of data analysis?
 
 Respond with EXACTLY one JSON object:
-{\"verdict\": \"pass\" or \"fail\", \"checks\": {\"problem_addressed\": bool, \"code_valid\": bool, \"artifacts_present\": bool, \"analysis_evident\": bool}, \"notes\": \"brief summary\"}
+{{"verdict": "pass" or "fail", "checks": {{"problem_addressed": true/false, "code_valid": true/false, "artifacts_present": true/false, "analysis_evident": true/false}}, "notes": "brief summary"}}
 
-Output ONLY the JSON." 2>/dev/null || echo '{"verdict":"pass","checks":{},"notes":"auto-pass"}')
+Output ONLY the JSON, no markdown, no explanation."""
+
+body = json.dumps({
+    'model': model,
+    'max_tokens': 1024,
+    'messages': [{'role': 'user', 'content': prompt}],
+}).encode()
+
+req = urllib.request.Request(
+    f'{proxy}/v1/messages',
+    data=body,
+    headers={
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ollama',
+        'anthropic-version': '2023-06-01',
+    },
+    method='POST',
+)
+try:
+    resp = urllib.request.urlopen(req, timeout=300)
+    result = json.load(resp)
+    text = ''
+    for block in result.get('content', []):
+        if block.get('type') == 'text':
+            text += block['text']
+    text = text.strip()
+    text = re.sub(r'^```\w*\n?', '', text)
+    text = re.sub(r'\n?```\s*$', '', text)
+    text = text.strip()
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if match:
+        text = match.group(0)
+    json.loads(text)
+    print(text)
+except Exception:
+    print('{"verdict":"pass","checks":{},"notes":"auto-pass"}')
+JUDGEPY
+)
 
     echo "$VERDICT" > judge_verdict.json
 
@@ -166,7 +210,7 @@ fi
 if [ "$ROLE" = "skill-extractor" ]; then
     log "Scanning for reusable patterns"
 
-    claude --dangerously-skip-permissions --model "$MODEL" -p \
+    claude --dangerously-skip-permissions --model "$MODEL" --max-turns 10 -p \
       "Analyze all Python and Markdown files in /workspace. Identify reusable patterns (data loading, feature engineering, model training, evaluation) that could benefit future problems. Write a SKILL.md file for each pattern found. Each SKILL.md should have: name, description, when_to_use, code_template." \
       > /dev/null 2>&1 || true
 
@@ -192,21 +236,72 @@ $PROBLEM_UUID
 $DESCRIPTION
 HEREDOC
 
-log "Step 2: Task decomposition via Claude Code"
-DECOMPOSITION=$(claude --dangerously-skip-permissions --model "$MODEL" -p \
-  "Decompose this problem into tasks for a data science team.
+log "Step 2: Task decomposition via Ollama API"
+export OAK_DECOMP_TITLE="$TITLE"
+export OAK_DECOMP_DESC="$DESCRIPTION"
 
-Problem: $TITLE
-Description: $DESCRIPTION
+DECOMPOSITION=$(python3 <<'PYEOF'
+import json, urllib.request, sys, os, re
+
+proxy = os.environ.get('ANTHROPIC_BASE_URL', 'http://oak-api-proxy:9000')
+model = os.environ.get('OAK_MODEL', 'qwen3-coder')
+title = os.environ.get('OAK_DECOMP_TITLE', 'Problem')
+desc = os.environ.get('OAK_DECOMP_DESC', '')
+
+prompt = f"""Decompose this problem into tasks for a data science team.
+
+Problem: {title}
+Description: {desc}
 
 Return ONLY a JSON array of tasks:
-[{\"title\": \"...\", \"task_type\": \"ingest|analyse|model|synthesise|validate\", \"role\": \"data-engineer|data-scientist|ml-engineer\", \"description\": \"...\"}]
+[{{"title": "...", "task_type": "ingest|analyse|model|synthesise|validate", "role": "data-engineer|data-scientist|ml-engineer", "description": "..."}}]
 
 Rules:
 - 2-5 tasks maximum
 - task_type must be one of: ingest, analyse, model, synthesise, validate
 - role must be one of: data-engineer, data-scientist, ml-engineer
-- Output ONLY the JSON array" 2>/dev/null || echo "[]")
+- Output ONLY the JSON array, no markdown fences, no explanation"""
+
+body = json.dumps({
+    'model': model,
+    'max_tokens': 2048,
+    'messages': [{'role': 'user', 'content': prompt}],
+}).encode()
+
+req = urllib.request.Request(
+    f'{proxy}/v1/messages',
+    data=body,
+    headers={
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ollama',
+        'anthropic-version': '2023-06-01',
+    },
+    method='POST',
+)
+try:
+    resp = urllib.request.urlopen(req, timeout=300)
+    result = json.load(resp)
+    text = ''
+    for block in result.get('content', []):
+        if block.get('type') == 'text':
+            text += block['text']
+    text = text.strip()
+    # Strip markdown code fences if present
+    text = re.sub(r'^```\w*\n?', '', text)
+    text = re.sub(r'\n?```\s*$', '', text)
+    text = text.strip()
+    # Extract JSON array if buried in text
+    match = re.search(r'\[.*\]', text, re.DOTALL)
+    if match:
+        text = match.group(0)
+    json.loads(text)
+    print(text)
+except Exception as e:
+    print(f'Decomposition error: {e}', file=sys.stderr)
+    print('[]')
+PYEOF
+)
+log "Decomposition result: $(echo "$DECOMPOSITION" | head -c 200)"
 
 TASK_IDS=$(echo "$DECOMPOSITION" | python3 -c "
 import sys, json, os

@@ -228,7 +228,8 @@ async def spawn_agent(
 ) -> dict[str, str]:
     """Spawn a specialist agent container for a specific role."""
     workspace_path = f"{settings.oak_workspace_base}/problem-{problem_id}"
-    container_name = f"oak-{body.role}-{problem_id}"
+    suffix = str(body.task_id)[:8] if body.task_id else str(uuid4())[:8]
+    container_name = f"oak-{body.role}-{suffix}"
 
     try:
         proc = await asyncio.create_subprocess_exec(
