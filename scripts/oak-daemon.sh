@@ -76,12 +76,65 @@ cleanup_orphan_containers() {
     exited=$(docker ps -a --filter "name=oak-harness-" --filter "status=exited" --format "{{.Names}}" 2>/dev/null)
     local count=0
     for c in $exited; do
-        # Keep last 5 for debugging
         if [ $count -ge 5 ]; then
             docker rm "$c" 2>/dev/null && log "CLEAN: Removed orphan $c"
         fi
         count=$((count + 1))
     done
+}
+
+sync_stale_problems() {
+    local result
+    result=$(curl -sf -X POST "$OAK_API/api/problems/cleanup" 2>/dev/null)
+    if [ -n "$result" ]; then
+        local cleaned
+        cleaned=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cleaned',0))" 2>/dev/null || echo "0")
+        if [ "$cleaned" -gt 0 ]; then
+            log "SYNC: Marked $cleaned stale problems as failed"
+        fi
+    fi
+}
+
+LAST_META_RUN=0
+META_COOLDOWN="${OAK_META_COOLDOWN:-3600}"
+
+trigger_meta_agent() {
+    local now
+    now=$(date +%s)
+    local elapsed=$((now - LAST_META_RUN))
+    if [ "$elapsed" -lt "$META_COOLDOWN" ]; then
+        log "META: Skipping — last run ${elapsed}s ago (cooldown ${META_COOLDOWN}s)"
+        return
+    fi
+
+    local health_data
+    health_data=$(curl -sf "$OAK_API/health" 2>/dev/null)
+    if [ -z "$health_data" ]; then
+        log "META: Cannot reach API, skipping"
+        return
+    fi
+
+    local meta_enabled
+    meta_enabled=$(echo "$health_data" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(d.get('feature_flags', {}).get('meta_agent_enabled', False))
+" 2>/dev/null || echo "False")
+
+    if [ "$meta_enabled" != "True" ]; then
+        log "META: Disabled via feature flag"
+        return
+    fi
+
+    log "META: Triggering meta-agent for self-improvement..."
+    local spawn_result
+    spawn_result=$(curl -sf -X POST "$OAK_API/api/agents/spawn?role=meta-agent&problem_uuid=00000000-0000-0000-0000-000000000000" 2>/dev/null)
+    if [ $? -eq 0 ] && [ -n "$spawn_result" ]; then
+        log "META: Agent spawned: $spawn_result"
+        LAST_META_RUN=$now
+    else
+        log "META: Spawn failed (may be at capacity)"
+    fi
 }
 
 run_health_cycle() {
@@ -105,8 +158,9 @@ run_health_cycle() {
     # Check models
     check_models
 
-    # Clean orphans
+    # Clean orphans and sync stale problems
     cleanup_orphan_containers
+    sync_stale_problems
 
     # Report
     local active
@@ -114,7 +168,8 @@ run_health_cycle() {
     log "Health check done: $issues issues, $active active problems"
 
     if [ "$active" -eq 0 ] && [ "$issues" -eq 0 ]; then
-        log "System idle and healthy"
+        log "System idle and healthy — checking meta-agent"
+        trigger_meta_agent
     fi
 }
 

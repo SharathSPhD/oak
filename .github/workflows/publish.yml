@@ -26,11 +26,14 @@ jobs:
             context: ./oak_mcp/oak-api-proxy
             dockerfile: Dockerfile
           - name: ui
-            context: ./ui
+            context: ./ui-next
             dockerfile: Dockerfile
           - name: harness
             context: ./docker/claude-harness
             dockerfile: Dockerfile
+          - name: daemon
+            context: .
+            dockerfile: docker/daemon/Dockerfile
 
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +41,7 @@ jobs:
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -46,7 +49,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.name }}
+          images: ghcr.io/${{ env.IMAGE_PREFIX }}-${{ matrix.name }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -73,7 +76,7 @@ jobs:
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -81,7 +84,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-aio
+          images: ghcr.io/${{ env.IMAGE_PREFIX }}-aio
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest

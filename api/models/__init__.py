@@ -61,6 +61,10 @@ class ProblemStartResponse(BaseModel):
     message: str
 
 
+class ProblemStatusUpdate(BaseModel):
+    status: ProblemStatus
+
+
 # ── Tasks ────────────────────────────────────────────────────────────────────
 
 class TaskCreate(BaseModel):

@@ -11,10 +11,11 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.config import OAKSettings
 from api.db.connection import get_db
-from api.dependencies import get_event_bus
+from api.dependencies import get_event_bus, get_settings
 from api.events.bus import AgentEvent, EventBus
-from api.models import ProblemCreate, ProblemResponse, ProblemStartResponse
+from api.models import ProblemCreate, ProblemResponse, ProblemStartResponse, ProblemStatusUpdate
 
 router = APIRouter(prefix="/api/problems", tags=["problems"])
 
@@ -95,6 +96,7 @@ async def start_problem(
     problem_id: UUID,
     db: AsyncSession = Depends(get_db),
     bus: EventBus = Depends(get_event_bus),
+    settings: OAKSettings = Depends(get_settings),
 ) -> ProblemStartResponse:
     """Start the agent pipeline for a problem. Creates worktree + launches harness."""
     result = await db.execute(
@@ -107,11 +109,11 @@ async def start_problem(
     if row["status"] not in ("pending", "failed"):
         raise HTTPException(status_code=409, detail=f"Problem is already {row['status']}")
 
-    oak_root = os.environ.get("OAK_ROOT", "/home/sharaths/projects/oak")
-    workspace_base = os.environ.get("OAK_WORKSPACE_BASE", os.path.expanduser("~/oak-workspaces"))
+    oak_root = settings.oak_root
+    workspace_base = settings.oak_workspace_base
     workspace_path = f"{workspace_base}/problem-{problem_id}"
     container_name = f"oak-harness-{problem_id}"
-    oak_network = os.environ.get("OAK_NETWORK", "oak_oak-net")
+    oak_network = settings.oak_network
 
     await db.execute(
         text("UPDATE problems SET status = 'active', updated_at = NOW() WHERE id = :id"),
@@ -186,6 +188,7 @@ async def upload_file(
     problem_id: UUID,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    settings: OAKSettings = Depends(get_settings),
 ) -> dict:
     """Upload a data file to the problem workspace."""
     result = await db.execute(
@@ -195,8 +198,7 @@ async def upload_file(
     if result.mappings().one_or_none() is None:
         raise HTTPException(status_code=404, detail="Problem not found")
 
-    workspace_base = os.environ.get("OAK_WORKSPACE_BASE", os.path.expanduser("~/oak-workspaces"))
-    workspace_path = Path(f"{workspace_base}/problem-{problem_id}")
+    workspace_path = Path(f"{settings.oak_workspace_base}/problem-{problem_id}")
     workspace_path.mkdir(parents=True, exist_ok=True)
 
     dest = workspace_path / file.filename
@@ -218,7 +220,7 @@ async def get_logs(problem_id: UUID) -> dict:
         stdout, _ = await proc.communicate()
         return {"container": container_name, "logs": stdout.decode(errors="replace")}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{problem_id}/status")
@@ -235,14 +237,16 @@ async def get_problem_status(problem_id: UUID) -> dict:
         container_status = stdout.decode().strip() or "not found"
         return {"container": container_name, "container_status": container_status}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{problem_id}/files")
-async def list_workspace_files(problem_id: UUID) -> dict:
+async def list_workspace_files(
+    problem_id: UUID,
+    settings: OAKSettings = Depends(get_settings),
+) -> dict:
     """List files in the problem workspace."""
-    workspace_base = os.environ.get("OAK_WORKSPACE_BASE", os.path.expanduser("~/oak-workspaces"))
-    workspace_path = Path(f"{workspace_base}/problem-{problem_id}")
+    workspace_path = Path(f"{settings.oak_workspace_base}/problem-{problem_id}")
     if not workspace_path.exists():
         return {"files": [], "workspace": str(workspace_path)}
     files = []
@@ -253,3 +257,101 @@ async def list_workspace_files(problem_id: UUID) -> dict:
                 "size": f.stat().st_size,
             })
     return {"files": files, "workspace": str(workspace_path)}
+
+
+@router.patch("/{problem_id}", response_model=ProblemResponse)
+async def update_problem_status(
+    problem_id: UUID,
+    body: ProblemStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> ProblemResponse:
+    """Update problem status (e.g. mark as failed, complete, archived)."""
+    result = await db.execute(
+        text("""
+            UPDATE problems SET status = :status, updated_at = NOW()
+            WHERE id = :id
+            RETURNING id, title, description, status, solution_url,
+            idempotency_key, created_at, updated_at
+        """),
+        {"id": str(problem_id), "status": body.status.value},
+    )
+    row = result.mappings().one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Problem not found")
+    await db.commit()
+    return ProblemResponse(**dict(row))
+
+
+@router.delete("/{problem_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_problem(
+    problem_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Hard-delete a problem and stop its harness container if running."""
+    result = await db.execute(
+        text("SELECT id FROM problems WHERE id = :id"),
+        {"id": str(problem_id)},
+    )
+    if result.mappings().one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Problem not found")
+
+    container_name = f"oak-harness-{problem_id}"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "rm", "-f", container_name,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+    except Exception:
+        pass
+
+    await db.execute(text("DELETE FROM tasks WHERE problem_id = :id"), {"id": str(problem_id)})
+    await db.execute(text("DELETE FROM mailbox WHERE problem_id = :id"), {"id": str(problem_id)})
+    await db.execute(
+        text("DELETE FROM agent_telemetry WHERE problem_id = :id"), {"id": str(problem_id)},
+    )
+    await db.execute(text("DELETE FROM problems WHERE id = :id"), {"id": str(problem_id)})
+    await db.commit()
+
+
+@router.post("/cleanup")
+async def cleanup_stale_problems(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Find active/assembling problems whose harness containers have exited and mark as failed."""
+    result = await db.execute(
+        text("SELECT id, status FROM problems WHERE status IN ('active', 'assembling')"),
+    )
+    rows = result.mappings().all()
+    cleaned = 0
+
+    for row in rows:
+        container_name = f"oak-harness-{row['id']}"
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "inspect", "--format", "{{.State.Running}}", container_name,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            running = stdout.decode().strip().lower()
+            if running != "true":
+                await db.execute(
+                    text(
+                        "UPDATE problems SET status = 'failed',"
+                        " updated_at = NOW() WHERE id = :id"
+                    ),
+                    {"id": str(row["id"])},
+                )
+                cleaned += 1
+        except Exception:
+            await db.execute(
+                text(
+                    "UPDATE problems SET status = 'failed',"
+                    " updated_at = NOW() WHERE id = :id"
+                ),
+                {"id": str(row["id"])},
+            )
+            cleaned += 1
+
+    await db.commit()
+    return {"cleaned": cleaned, "total_checked": len(rows)}

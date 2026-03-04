@@ -105,14 +105,14 @@ services:
     environment:
       DATABASE_URL: postgresql://oak:oak@oak-postgres:5432/oak
       REDIS_URL: redis://oak-redis:6379
-      META_AGENT_ENABLED: ${META_AGENT_ENABLED:-false}
-      OAK_ROOT: /home/sharaths/projects/oak
-      OAK_WORKSPACE_BASE: /home/sharaths/oak-workspaces
-      OAK_NETWORK: oak_oak-net
+      META_AGENT_ENABLED: ${META_AGENT_ENABLED:-true}
+      OAK_ROOT: ${OAK_ROOT:?Set OAK_ROOT in .env to the host path of the oak repo}
+      OAK_WORKSPACE_BASE: ${OAK_WORKSPACE_BASE:?Set OAK_WORKSPACE_BASE in .env}
+      OAK_NETWORK: ${OAK_NETWORK:-oak_oak-net}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /home/sharaths/oak-workspaces:/home/sharaths/oak-workspaces
-      - /home/sharaths/projects/oak:/home/sharaths/projects/oak:ro
+      - ${OAK_WORKSPACE_BASE}:${OAK_WORKSPACE_BASE}
+      - ${OAK_ROOT}:${OAK_ROOT}:ro
     depends_on:
       oak-postgres:
         condition: service_healthy
@@ -145,13 +145,13 @@ services:
   oak-ui:
     image: oak/ui:latest
     build:
-      context: ./ui
+      context: ./ui-next
     restart: unless-stopped
     networks: [oak-net]
     ports:
-      - "8501:8501"
+      - "8501:3000"
     environment:
-      OAK_API_URL: http://oak-api:8000
+      NEXT_PUBLIC_API_URL: http://oak-api:8000
     depends_on:
       - oak-api
     profiles: ["dgx"]
@@ -192,7 +192,7 @@ services:
       MAX_AGENTS_PER_PROBLEM: "3"
       MAX_CONCURRENT_PROBLEMS: "1"
       MAX_HARNESS_CONTAINERS: "4"
-      META_AGENT_ENABLED: ${META_AGENT_ENABLED:-false}
+      META_AGENT_ENABLED: ${META_AGENT_ENABLED:-true}
     depends_on:
       oak-postgres:
         condition: service_healthy
@@ -227,14 +227,13 @@ services:
   oak-ui-mini:
     image: oak/ui:latest
     build:
-      context: ./ui
+      context: ./ui-next
     restart: unless-stopped
     networks: [oak-net]
     ports:
-      - "8501:8501"
+      - "8501:3000"
     environment:
-      OAK_API_URL: http://oak-api-mini:8000
-      OAK_MODE: mini
+      NEXT_PUBLIC_API_URL: http://oak-api-mini:8000
     depends_on:
       - oak-api-mini
     profiles: ["mini"]
@@ -279,7 +278,7 @@ services:
       MAX_CONCURRENT_PROBLEMS: "3"
       MAX_HARNESS_CONTAINERS: "15"
       CONCURRENT_PROBLEMS_ENABLED: "true"
-      META_AGENT_ENABLED: ${META_AGENT_ENABLED:-false}
+      META_AGENT_ENABLED: ${META_AGENT_ENABLED:-true}
     depends_on:
       oak-postgres:
         condition: service_healthy
@@ -311,16 +310,38 @@ services:
   oak-ui-cloud:
     image: oak/ui:latest
     build:
-      context: ./ui
+      context: ./ui-next
     restart: unless-stopped
     networks: [oak-net]
     ports:
-      - "8501:8501"
+      - "8501:3000"
     environment:
-      OAK_API_URL: http://oak-api-cloud:8000
+      NEXT_PUBLIC_API_URL: http://oak-api-cloud:8000
     depends_on:
       - oak-api-cloud
     profiles: ["cloud"]
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Self-healing daemon (all profiles)
+  # ──────────────────────────────────────────────────────────────────────────
+
+  oak-daemon:
+    image: oak/daemon:latest
+    build:
+      context: .
+      dockerfile: docker/daemon/Dockerfile
+    restart: unless-stopped
+    networks: [oak-net]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      OAK_API_URL: http://oak-api:8000
+      OAK_DAEMON_POLL_INTERVAL: "${OAK_DAEMON_POLL_INTERVAL:-60}"
+      OAK_MODE: ${OAK_MODE:-dgx}
+      OAK_META_COOLDOWN: "${OAK_META_COOLDOWN:-3600}"
+    depends_on:
+      - oak-api
+    profiles: ["dgx", "mini", "cloud"]
 
   # ──────────────────────────────────────────────────────────────────────────
   # Harness: spawned on-demand per problem (all profiles, restart: no)

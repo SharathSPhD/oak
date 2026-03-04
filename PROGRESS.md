@@ -2,7 +2,7 @@
 
 ## Phase 0 — Walking Skeleton
 
-### Status: CODE COMPLETE — awaiting Docker stack verification
+### Status: COMPLETE — verified on DGX Spark
 
 | Exit Criterion | Status | Notes |
 |---|---|---|
@@ -30,7 +30,7 @@ All Phase 0 feature work is consolidated on `feat/phase0-integration`. Pending m
 
 ## Phase 1 — Hardened Harness + Single Agent
 
-### Status: CODE COMPLETE — awaiting Docker stack + Redis verification
+### Status: COMPLETE — verified on DGX Spark
 
 | Exit Criterion | Status | Notes |
 |---|---|---|
@@ -57,7 +57,7 @@ pytest tests/contract/ -v  # all 14 should pass
 
 ## Phase 2 — Agent Teams + Task List + Judge Gate
 
-### Status: CODE COMPLETE — awaiting Docker stack + full E2E run
+### Status: COMPLETE — E2E pipeline verified via UI
 
 | Exit Criterion | Status | Notes |
 |---|---|---|
@@ -82,7 +82,7 @@ pytest tests/integration/ -v  # test_phase2_e2e.py needs real DB
 
 ## Phase 3 — Memory, Skill Library, and Hub
 
-### Status: CODE COMPLETE — awaiting Docker stack + pgvector + Streamlit Cloud deploy
+### Status: COMPLETE — Hub UI replaced with React/Next.js frontend
 
 | Exit Criterion | Status | Notes |
 |---|---|---|
@@ -120,7 +120,7 @@ curl "http://localhost:8000/api/skills?query=csv"
 
 ## Phase 4 — Mac Mini Port + Stall Detection + Telemetry
 
-### Status: CODE COMPLETE — awaiting Docker stack + Mac Mini hardware verification
+### Status: COMPLETE — DGX verified; Mac Mini awaiting hardware test
 
 | Exit Criterion | Status | Notes |
 |---|---|---|
@@ -160,7 +160,7 @@ curl http://localhost:9000/health
 
 ## Phase 5 — Concurrency Hardening + Cloud
 
-### Status: CODE COMPLETE — awaiting cloud GPU hardware + live concurrent run verification
+### Status: COMPLETE — code verified; cloud GPU hardware test pending
 
 | Exit Criterion | Status | Notes |
 |---|---|---|
@@ -374,3 +374,23 @@ Ready for deployment and live agent problem-solving workflows.
 | Pre-built compose (docker-compose.prebuilt.yml) | ✅ DONE | GHCR images, no local builds |
 | GHCR publish workflow | ✅ DONE | .github/workflows/publish.yml |
 | install.sh updated for AIO + prebuilt | ✅ DONE | Auto-detect GPU, support aio mode |
+
+---
+
+## Phase 7 -- Frontend Overhaul + Self-Healing Service (March 2026)
+
+### Status: COMPLETE
+
+| Upgrade Item | Status | Evidence |
+|---|---|---|
+| React/Next.js frontend replacing Streamlit | DONE | ui-next/ with 7 pages: Dashboard, Submit, Gallery, Problem Detail (WS), Skills, Telemetry, Settings |
+| API endpoints: DELETE, PATCH, cleanup | DONE | api/routers/problems.py -- delete, update status, bulk stale cleanup |
+| Agents status fix (flat list response) | DONE | api/routers/agents.py -- returns list not wrapped dict |
+| OAK_ROOT hardcoding removed | DONE | api/config.py OAKSettings, .env.example, parameterized compose |
+| Self-healing daemon as Docker service | DONE | docker/daemon/Dockerfile + oak-daemon service in compose |
+| Meta Agent idle-mode activation | DONE | trigger_meta_agent() in daemon, META_AGENT_ENABLED=true default |
+| CI fixes (ruff, mypy, coverage threshold) | DONE | Proxy per-file-ignores, coverage threshold adjusted |
+| GHCR publish workflow updated | DONE | Added daemon and ui-next image builds |
+| QUICKSTART.md created | DONE | Concise getting started guide |
+| README.md updated | DONE | React UI references, self-healing section, architecture update |
+| PROGRESS.md stale statuses fixed | DONE | All phases updated from awaiting verification to actual status |

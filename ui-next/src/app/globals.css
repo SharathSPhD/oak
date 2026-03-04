@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  ::selection {
+    @apply bg-oak-200 text-oak-900;
+  }
+}
+
+@layer components {
+  .page-container {
+    @apply ml-64 min-h-screen px-8 py-6;
+  }
+
+  .page-header {
+    @apply mb-8;
+  }
+
+  .page-title {
+    @apply text-2xl font-bold text-slate-900 tracking-tight;
+  }
+
+  .page-subtitle {
+    @apply mt-1 text-sm text-slate-500;
+  }
+
+  .empty-state {
+    @apply flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 bg-white px-8 py-16 text-center;
+  }
+}

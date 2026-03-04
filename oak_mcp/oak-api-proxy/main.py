@@ -34,7 +34,8 @@ ANTHROPIC_API_KEY_REAL = os.environ.get("ANTHROPIC_API_KEY_REAL", "")
 ROUTING_STRATEGY_NAME = os.environ.get("ROUTING_STRATEGY", "passthrough")
 STALL_DETECTION_ENABLED = os.environ.get("STALL_DETECTION_ENABLED", "false").lower() == "true"
 STALL_MIN_TOKENS = int(os.environ.get("STALL_MIN_TOKENS", "20"))
-COUNCIL_MODELS = [m.strip() for m in os.environ.get("COUNCIL_MODELS", "qwen3-coder,deepseek-r1:14b").split(",") if m.strip()]
+_raw_council = os.environ.get("COUNCIL_MODELS", "qwen3-coder,deepseek-r1:14b")
+COUNCIL_MODELS = [m.strip() for m in _raw_council.split(",") if m.strip()]
 COUNCIL_JUDGE_MODEL = os.environ.get("COUNCIL_JUDGE_MODEL", "deepseek-r1:14b")
 
 # Default Ollama model for all Claude Code orchestrator calls

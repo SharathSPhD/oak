@@ -2,7 +2,7 @@
 
 ## The Open Agent Knowledge-Factory
 
-**Version 1.1** | DGX Spark Edition | March 2026
+**Version 2.0** | DGX Spark Edition | March 2026
 
 ---
 
@@ -17,11 +17,13 @@
 7. [How OAK Solves Problems](#7-how-oak-solves-problems)
 8. [Monitoring Progress](#8-monitoring-progress)
 9. [Reading Results](#9-reading-results)
-10. [**Live Demo Walkthrough**](#10-live-demo-walkthrough) ← *Real run on DGX Spark*
-11. [API Reference](#105-api-reference)
-12. [Troubleshooting](#11-troubleshooting)
-13. [Advanced: Skill Library](#12-advanced-skill-library)
-14. [Streamlit Cloud Deployment](#14-streamlit-cloud-deployment-optional)
+10. [Live Demo Walkthrough](#10-live-demo-walkthrough)
+11. [API Reference](#11-api-reference)
+12. [Troubleshooting](#12-troubleshooting)
+13. [Advanced: Skill Library](#13-advanced-skill-library)
+14. [Self-Healing and Self-Improvement](#14-self-healing-and-self-improvement)
+15. [Gallery Management](#15-gallery-management)
+16. [Configuration Reference](#16-configuration-reference)
 
 ---
 
@@ -55,7 +57,7 @@ Instead of running individual analyses, you describe your problem once. OAK:
 
 ## 2. System Architecture
 
-OAK is organized into **six layers**:
+OAK is organized into **seven layers**:
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -1821,4 +1823,74 @@ When enabled, the Meta Agent runs on schedule (daily or after every 10 problems)
 
 ---
 
-**OAK v1.1** | Built for DGX Spark | March 2026
+---
+
+## 14. Self-Healing and Self-Improvement
+
+OAK includes a self-healing daemon (`oak-daemon`) that runs as a Docker service alongside the main stack.
+
+### What the Daemon Does
+
+The daemon runs a health cycle every 60 seconds (configurable via `OAK_DAEMON_POLL_INTERVAL`):
+
+1. **Service health checks** -- verifies PostgreSQL, Redis, Ollama, API, and proxy are running
+2. **Database connectivity** -- confirms PostgreSQL accepts connections
+3. **Model verification** -- ensures required Ollama models (e.g., `qwen3-coder`) are pulled
+4. **Orphan cleanup** -- removes exited harness containers (keeps last 5 for debugging)
+5. **Stale problem sync** -- marks problems with exited containers as `failed`
+6. **Meta Agent trigger** -- when the system is idle and healthy, spawns the Meta Agent for self-improvement
+
+### Meta Agent (Self-Improvement)
+
+When enabled (`META_AGENT_ENABLED=true`, which is now the default), the Meta Agent:
+
+- Reads agent telemetry data to identify recurring failure patterns
+- Proposes prompt amendments for agent definitions
+- Operates on a cooldown (default 1 hour) to avoid resource contention
+
+The Meta Agent only runs during idle periods (no active problems and no health issues).
+
+---
+
+## 15. Gallery Management
+
+The Problem Gallery provides tools to manage your problem history:
+
+### Per-Problem Actions
+
+- **View** -- navigate to the problem detail page
+- **Start** -- launch the agent pipeline for pending problems
+- **Delete** -- permanently remove a problem and all associated data (tasks, telemetry, mailbox)
+
+### Bulk Cleanup
+
+Click **Clean Stale** to automatically find problems marked as `active` or `assembling` whose Docker containers have exited, and mark them as `failed`. This is useful after system restarts or unexpected container exits.
+
+### Filtering
+
+Use the filter tabs to view problems by status: All, Pending, Active, Complete, or Failed.
+
+---
+
+## 16. Configuration Reference
+
+All configuration is managed via environment variables. Create a `.env` file from `.env.example`:
+
+| Variable | Description | Default |
+|---|---|---|
+| `OAK_MODE` | Platform profile | `dgx` |
+| `OAK_ROOT` | Host path to OAK repository | `/app` |
+| `OAK_WORKSPACE_BASE` | Host path for problem workspaces | `/workspaces` |
+| `OAK_NETWORK` | Docker network name | `oak_oak-net` |
+| `META_AGENT_ENABLED` | Enable self-improvement agent | `true` |
+| `CODER_MODEL` | Ollama model for code generation | `qwen3-coder` |
+| `ANALYSIS_MODEL` | Ollama model for analysis | `glm-4.7` |
+| `REASONING_MODEL` | Ollama model for orchestration/judge | `llama3.3:70b` |
+| `MAX_AGENTS_PER_PROBLEM` | Max agent containers per problem | `10` |
+| `MAX_CONCURRENT_PROBLEMS` | Max simultaneous problems | `3` |
+| `OAK_DAEMON_POLL_INTERVAL` | Daemon health check interval (seconds) | `60` |
+| `OAK_META_COOLDOWN` | Meta Agent minimum interval (seconds) | `3600` |
+
+---
+
+**OAK v2.0** | Built for DGX Spark | March 2026

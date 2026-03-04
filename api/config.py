@@ -25,6 +25,9 @@ class OAKSettings(BaseSettings):
 
     # -- Platform -----------------------------------------------------------------
     oak_mode: OAKMode = OAKMode.DGX
+    oak_root: str = "/app"
+    oak_workspace_base: str = "/workspaces"
+    oak_network: str = "oak_oak-net"
 
     # -- Inference ----------------------------------------------------------------
     anthropic_base_url: str     = "http://oak-api-proxy:9000"

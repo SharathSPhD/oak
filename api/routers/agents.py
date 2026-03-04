@@ -68,12 +68,12 @@ async def spawn_agent(
 @router.get("/status")
 async def get_agents_status(
     settings: OAKSettings = Depends(get_settings),
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     """Return status of all running agents from registry."""
     from api.services.agent_registry import AgentRegistry
     registry = AgentRegistry(str(settings.redis_url))
     agents = await registry.get_all()
-    return {"agents": [a.model_dump() for a in agents]}
+    return [a.model_dump() for a in agents]
 
 
 @router.get("/models")
