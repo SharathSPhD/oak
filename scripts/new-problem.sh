@@ -28,6 +28,7 @@ docker run -d \
     -e ANTHROPIC_AUTH_TOKEN=ollama \
     -e ANTHROPIC_API_KEY="" \
     -e OAK_PROBLEM_UUID="$PROBLEM_UUID" \
+    -e OAK_API_URL=http://oak-api:8000 \
     -v "${WORKTREE_PATH}:/workspace" \
     oak/harness:latest
 

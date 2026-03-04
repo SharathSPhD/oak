@@ -21,6 +21,10 @@ RUN chmod +x /usr/local/bin/oak-session
 COPY scripts/tool-proxy.sh /usr/local/bin/tool-proxy
 RUN chmod +x /usr/local/bin/tool-proxy
 
+# Install oak-entrypoint script
+COPY scripts/entrypoint.sh /usr/local/bin/oak-entrypoint
+RUN chmod +x /usr/local/bin/oak-entrypoint
+
 # Workspace mount point
 WORKDIR /workspace
 VOLUME ["/workspace", "/mnt/oak-data", "/mnt/oak-skills"]
@@ -31,5 +35,5 @@ ENV ANTHROPIC_AUTH_TOKEN=ollama
 ENV ANTHROPIC_API_KEY=""
 ENV CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 
-# Entrypoint: restore session, then start Claude Code via tool-proxy
-ENTRYPOINT ["tool-proxy", "claude", "--dangerously-skip-permissions"]
+# Entrypoint: fetch problem details and start Claude Code with initial task
+ENTRYPOINT ["/usr/local/bin/oak-entrypoint"]
