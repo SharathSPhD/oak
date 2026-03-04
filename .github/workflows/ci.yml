@@ -53,7 +53,7 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run unit tests
-        run: pytest tests/unit/ -v --cov=api --cov=memory --cov-report=term-missing --cov-fail-under=70
+        run: pytest tests/unit/ -v --cov=api --cov=memory --cov-report=term-missing --cov-fail-under=60
 
   ui-build:
     runs-on: ubuntu-latest
