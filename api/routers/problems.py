@@ -120,6 +120,7 @@ async def start_problem(
     await db.commit()
 
     Path(workspace_path).mkdir(parents=True, exist_ok=True)
+    os.chmod(workspace_path, 0o777)
 
     try:
         subprocess.run(

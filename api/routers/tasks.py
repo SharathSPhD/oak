@@ -48,7 +48,7 @@ async def create_task(
     return TaskResponse(**row)
 
 
-@router.get("/", response_model=list[TaskResponse])
+@router.get("", response_model=list[TaskResponse])
 async def list_tasks(
     problem_id: UUID = Query(...),
     db: AsyncSession = Depends(get_db),
