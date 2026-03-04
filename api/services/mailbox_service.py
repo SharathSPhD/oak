@@ -17,10 +17,9 @@ class MailboxService:
     CHANNEL_PREFIX = "oak:mailbox:"
 
     def __init__(self, redis_url: str) -> None:
+        self._redis: aioredis.Redis | None = None
         if _REDIS_AVAILABLE:
             self._redis = aioredis.from_url(redis_url, decode_responses=True)
-        else:
-            self._redis = None
 
     async def publish(self, to_agent: str, message_id: str, body: str) -> None:
         """Publish message notification to agent's Redis channel."""

@@ -41,7 +41,7 @@ class PostgreSQLEpisodicRepository(EpisodicMemoryRepository):
 
     async def retrieve_global(
         self, embedding: list[float], limit: int = 10
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         """Retrieve similar episodes across all problems."""
         conn = await asyncpg.connect(self._conn_str)
         try:

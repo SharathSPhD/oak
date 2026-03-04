@@ -10,7 +10,7 @@ try:
     import redis.asyncio as aioredis
     _REDIS_AVAILABLE = True
 except ImportError:
-    aioredis = None
+    aioredis = None  # type: ignore[assignment]
     _REDIS_AVAILABLE = False
 
 
@@ -21,10 +21,9 @@ class AgentRegistry:
     TTL = 300
 
     def __init__(self, redis_url: str) -> None:
+        self._redis: aioredis.Redis | None = None
         if _REDIS_AVAILABLE and aioredis:
             self._redis = aioredis.from_url(redis_url, decode_responses=True)
-        else:
-            self._redis = None
 
     async def register(
         self, agent_id: str, role: str, problem_uuid: str = "", container_id: str = ""

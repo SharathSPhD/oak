@@ -14,6 +14,77 @@ if [ -z "$PROBLEM_UUID" ]; then
     exit 1
 fi
 
+# ── Role-based dispatch ──────────────────────────────────────────────────
+if [ "$ROLE" = "meta-agent" ]; then
+    echo "[meta-agent] Starting self-improvement cycle"
+    cd /workspace
+
+    echo "[meta-agent] Fetching system telemetry..."
+    HEALTH=$(curl -sf "$OAK_API/health" || echo "{}")
+    TELEMETRY=$(curl -sf "$OAK_API/api/telemetry" || echo "{}")
+    MODELS=$(curl -sf "$OAK_API/api/agents/models" || echo "{}")
+
+    cat > META_CONTEXT.md <<METAEOF
+# OAK Meta-Agent — Self-Improvement Input
+
+## System Health
+\`\`\`json
+$HEALTH
+\`\`\`
+
+## Telemetry Summary
+\`\`\`json
+$TELEMETRY
+\`\`\`
+
+## Model Routing
+\`\`\`json
+$MODELS
+\`\`\`
+METAEOF
+
+    echo "[meta-agent] Generating improvement proposals..."
+    claude --dangerously-skip-permissions --model "$MODEL" -p \
+      "You are the OAK Meta Agent. Analyze the system telemetry and health data in META_CONTEXT.md.
+
+Your job: identify patterns in agent failures, model performance issues, and configuration
+opportunities. Produce a JSON file called meta_proposals.json with this schema:
+
+{
+  \"timestamp\": \"ISO-8601\",
+  \"proposals\": [
+    {
+      \"type\": \"prompt_amendment|config_change|skill_suggestion|model_routing\",
+      \"target\": \"agent name or config key\",
+      \"rationale\": \"evidence-based reasoning\",
+      \"change\": \"specific proposed change\",
+      \"confidence\": 0.0-1.0,
+      \"evidence_count\": <int>
+    }
+  ],
+  \"system_summary\": \"brief overall health assessment\"
+}
+
+Rules:
+- Only propose changes backed by telemetry evidence (escalation patterns, failure rates, etc).
+- If telemetry is empty or system is healthy with no issues, return an empty proposals array.
+- Never propose changes with confidence below 0.5.
+- Output ONLY valid JSON, no explanation." > meta_proposals.json 2>/dev/null || true
+
+    if python3 -c "import json; json.load(open('meta_proposals.json'))" 2>/dev/null; then
+        echo "[meta-agent] Valid proposals generated:"
+        python3 -c "import json; d=json.load(open('meta_proposals.json')); print(f'  Proposals: {len(d.get(\"proposals\",[]))}'); print(f'  Summary: {d.get(\"system_summary\",\"N/A\")}')"
+    else
+        echo "[meta-agent] Claude output was not valid JSON, writing empty proposals"
+        echo '{"timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","proposals":[],"system_summary":"No actionable patterns detected"}' > meta_proposals.json
+    fi
+
+    echo "[meta-agent] Self-improvement cycle complete"
+    ls -la /workspace/
+    exit 0
+fi
+# ── End meta-agent dispatch ──────────────────────────────────────────────
+
 echo "[entrypoint] Fetching problem $PROBLEM_UUID from $OAK_API..."
 PROBLEM_JSON=$(curl -sf "$OAK_API/api/problems/$PROBLEM_UUID" || echo "{}")
 TITLE=$(echo "$PROBLEM_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('title','Unknown Problem'))" 2>/dev/null || echo "Problem $PROBLEM_UUID")

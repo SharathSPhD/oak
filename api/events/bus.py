@@ -107,8 +107,10 @@ class EpisodicMemorySubscriber(EventSubscriber):
                     json={"model": "nomic-embed-text", "prompt": text[:8000]},
                 )
                 if resp.status_code == 200:
-                    data = resp.json()
-                    return data.get("embedding")
+                    data: dict[str, object] = resp.json()
+                    emb = data.get("embedding")
+                    if isinstance(emb, list):
+                        return [float(x) for x in emb]
         except Exception:
             pass
         return None

@@ -9,7 +9,7 @@ from fastapi.routing import APIRouter
 try:
     import redis.asyncio as aioredis  # available at runtime inside Docker
 except ImportError:  # pragma: no cover — redis absent only in bare test envs
-    aioredis = None
+    aioredis = None  # type: ignore[assignment]
 
 router = APIRouter()
 
@@ -39,6 +39,6 @@ async def websocket_stream(websocket: WebSocket, problem_uuid: str) -> None:
     finally:
         if pubsub:
             await pubsub.unsubscribe()
-            await pubsub.aclose()
+            await pubsub.aclose()  # type: ignore[no-untyped-call]
         if redis_client:
             await redis_client.aclose()

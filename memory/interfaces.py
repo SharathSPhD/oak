@@ -57,7 +57,7 @@ class EpisodicMemoryRepository(ABC):
 
     async def retrieve_global(
         self, embedding: list[float], limit: int = 10
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         """Retrieve similar episodes across all problems. Default no-op; override in impl."""
         return []
 

@@ -179,7 +179,9 @@ services:
       context: .
       dockerfile: docker/api/Dockerfile
     restart: unless-stopped
-    networks: [oak-net]
+    networks:
+      oak-net:
+        aliases: [oak-api]
     ports:
       - "8000:8000"
     environment:
@@ -264,7 +266,9 @@ services:
       context: .
       dockerfile: docker/api/Dockerfile
     restart: unless-stopped
-    networks: [oak-net]
+    networks:
+      oak-net:
+        aliases: [oak-api]
     ports:
       - "8000:8000"
     environment:

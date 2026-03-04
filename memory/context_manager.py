@@ -2,6 +2,7 @@
 __pattern__ = "Strategy"
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -32,9 +33,9 @@ class ContextManager:
 
     def __init__(self, max_tokens: int = 128000) -> None:
         self.budget = ContextBudget(max_tokens=max_tokens)
-        self._episodes: list[dict] = []
+        self._episodes: list[dict[str, Any]] = []
 
-    def add_episode(self, episode: dict, estimated_tokens: int = 100) -> bool:
+    def add_episode(self, episode: dict[str, Any], estimated_tokens: int = 100) -> bool:
         """Add an episode to context. Returns False if budget exceeded."""
         if estimated_tokens > self.budget.available:
             return False
@@ -42,7 +43,7 @@ class ContextManager:
         self.budget.consume(estimated_tokens)
         return True
 
-    def get_context_episodes(self) -> list[dict]:
+    def get_context_episodes(self) -> list[dict[str, Any]]:
         """Return episodes ordered by relevance (recent + high importance first)."""
         return sorted(
             self._episodes,

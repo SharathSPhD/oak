@@ -189,7 +189,7 @@ async def upload_file(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     settings: OAKSettings = Depends(get_settings),
-) -> dict:
+) -> dict[str, object]:
     """Upload a data file to the problem workspace."""
     result = await db.execute(
         text("SELECT id FROM problems WHERE id = :id"),
@@ -201,15 +201,16 @@ async def upload_file(
     workspace_path = Path(f"{settings.oak_workspace_base}/problem-{problem_id}")
     workspace_path.mkdir(parents=True, exist_ok=True)
 
-    dest = workspace_path / file.filename
+    fname = file.filename or "uploaded_file"
+    dest = workspace_path / fname
     content = await file.read()
     dest.write_bytes(content)
 
-    return {"filename": file.filename, "size": len(content), "path": str(dest)}
+    return {"filename": fname, "size": len(content), "path": str(dest)}
 
 
 @router.get("/{problem_id}/logs")
-async def get_logs(problem_id: UUID) -> dict:
+async def get_logs(problem_id: UUID) -> dict[str, str]:
     """Get harness container logs for a problem."""
     container_name = f"oak-harness-{problem_id}"
     try:
@@ -224,7 +225,7 @@ async def get_logs(problem_id: UUID) -> dict:
 
 
 @router.get("/{problem_id}/status")
-async def get_problem_status(problem_id: UUID) -> dict:
+async def get_problem_status(problem_id: UUID) -> dict[str, str]:
     """Get harness container status for a problem."""
     container_name = f"oak-harness-{problem_id}"
     try:
@@ -244,7 +245,7 @@ async def get_problem_status(problem_id: UUID) -> dict:
 async def list_workspace_files(
     problem_id: UUID,
     settings: OAKSettings = Depends(get_settings),
-) -> dict:
+) -> dict[str, object]:
     """List files in the problem workspace."""
     workspace_path = Path(f"{settings.oak_workspace_base}/problem-{problem_id}")
     if not workspace_path.exists():
@@ -317,7 +318,7 @@ async def delete_problem(
 @router.post("/cleanup")
 async def cleanup_stale_problems(
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> dict[str, int]:
     """Find active/assembling problems whose harness containers have exited and mark as failed."""
     result = await db.execute(
         text("SELECT id, status FROM problems WHERE status IN ('active', 'assembling')"),
