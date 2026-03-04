@@ -29,4 +29,5 @@ Your task: Follow the OAK agent lifecycle (RESTORE → ORIENT → SKILL_QUERY �
 Begin now."
 
 echo "[entrypoint] Starting Claude Code orchestrator for problem $PROBLEM_UUID"
-exec claude --dangerously-skip-permissions -p "$INITIAL_PROMPT"
+MODEL="${OAK_MODEL:-claude-sonnet-4-6}"
+exec claude --dangerously-skip-permissions --model "$MODEL" -p "$INITIAL_PROMPT"

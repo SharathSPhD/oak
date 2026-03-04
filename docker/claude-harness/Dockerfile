@@ -13,6 +13,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # Install Claude Code
 RUN npm install -g @anthropic-ai/claude-code
 
+# Install Python data science packages used by problem agents
+RUN pip3 install --no-cache-dir pandas requests numpy scikit-learn
+
 # Install oak-session state manager
 COPY scripts/session-state.py /usr/local/bin/oak-session
 RUN chmod +x /usr/local/bin/oak-session
@@ -39,6 +42,7 @@ ENV ANTHROPIC_BASE_URL=http://oak-api-proxy:9000
 ENV ANTHROPIC_AUTH_TOKEN=ollama
 ENV ANTHROPIC_API_KEY="ollama"
 ENV CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 USER oak
 

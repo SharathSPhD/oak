@@ -20,12 +20,14 @@ x-oak-harness: &oak-harness-defaults
     ANTHROPIC_AUTH_TOKEN: ollama
     ANTHROPIC_API_KEY: ""
     CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1"
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
     REDIS_URL: redis://oak-redis:6379
     DATABASE_URL: postgresql://oak:oak@oak-postgres:5432/oak
   volumes:
     - oak-data:/mnt/oak-data:ro
     - oak-skills:/mnt/oak-skills:ro
     - ./scripts/deny-patterns.txt:/workspace/scripts/deny-patterns.txt:ro
+    - ./.claude:/workspace/.claude:ro
   depends_on:
     - oak-api-proxy
     - oak-redis
@@ -127,6 +129,7 @@ services:
     environment:
       REDIS_URL: redis://oak-redis:6379
       OLLAMA_BASE_URL: http://oak-ollama:11434
+      OLLAMA_DEFAULT_MODEL: qwen3-coder
       ROUTING_STRATEGY: passthrough
     depends_on:
       - oak-redis

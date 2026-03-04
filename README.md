@@ -23,7 +23,20 @@ SOIL    ── DGX Spark GB10 (121 GB RAM)         GPU inference via Ollama
 - Docker 24+ and Docker Compose
 - NVIDIA GPU + drivers (DGX/mini mode) or CPU-only (cloud mode)
 
-### One command
+### Option A: All-in-One (easiest)
+```bash
+docker run -d --name oak-aio \
+  -p 8501:8501 -p 8000:8000 -p 9000:9000 \
+  ghcr.io/sharathsphd/oak-aio:latest
+```
+
+### Option B: Multi-service (production)
+```bash
+# Pre-built images — no local builds needed
+curl -sL https://raw.githubusercontent.com/SharathSPhD/oak/main/install.sh | bash
+```
+
+### Option C: From source
 ```bash
 git clone https://github.com/SharathSPhD/oak.git
 cd oak
@@ -61,8 +74,11 @@ bash scripts/new-problem.sh <problem-uuid>
 | Agent Role | Model | Purpose |
 |---|---|---|
 | data-engineer, ml-engineer | `qwen3-coder` (default) | ETL, code generation |
-| data-scientist, skill-extractor | `glm-4.7` | Analysis, EDA |
-| orchestrator, judge, meta, architect | `llama3.3:70b` | Reasoning, synthesis |
+| data-scientist, skill-extractor | `deepseek-r1:14b` | Analysis, reasoning |
+| orchestrator, judge, meta, architect | `qwen2.5:14b` | Reasoning, synthesis |
+| ai-engineer | `qwen3-coder` | LLM features, RAG |
+| security-expert | `deepseek-r1:14b` | Security auditing |
+| devops, frontend | `qwen3-coder` | Infrastructure, UI |
 
 Override via env: `CODER_MODEL=deepseek-v3 REASONING_MODEL=llama3.3:70b bash scripts/bootstrap.sh dgx`
 

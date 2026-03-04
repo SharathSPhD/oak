@@ -380,3 +380,82 @@ This is the isolated workspace where the orchestrator and all spawned agents wri
 
 **Generated:** 2026-03-03 23:00 UTC
 **DGX Spark:** NVIDIA GB10, 121 GB RAM, Docker 29.1.3
+
+---
+
+## Comprehensive Upgrade Demo — March 2026
+
+**Date:** 2026-03-04
+**Environment:** DGX Spark (NVIDIA GB10, 128 GB unified memory)
+**Stack:** 6 containers + harness on-demand
+
+### Environment
+
+```
+CONTAINERS:
+oak-oak-postgres-1    Up (healthy)   5432
+oak-oak-redis-1       Up (healthy)   6379
+oak-oak-ollama-1      Up             11434
+oak-oak-api-1         Up (healthy)   8000
+oak-oak-api-proxy-1   Up             9000
+oak-oak-ui-1          Up (healthy)   8501
+
+MODELS:
+qwen3-coder:latest    18 GB
+deepseek-r1:14b       9.0 GB
+qwen2.5:14b           9.0 GB
+```
+
+### Proxy Fix Verified
+
+Default model changed from llama3.3:70b (not pulled) to qwen3-coder. Proxy now:
+- Streams text deltas incrementally (no buffering)
+- Detects XML tool calls at stream finish
+- Accepts x-oak-model header for role-based routing
+
+```json
+{
+  "status": "healthy",
+  "ollama_model": "qwen3-coder",
+  "routing_strategy": "passthrough"
+}
+```
+
+### End-to-End Iris Classification Pipeline
+
+**Problem:** Load sklearn iris dataset, train Random Forest, evaluate, generate report.
+
+**Execution:**
+1. Claude Code wrote `iris_pipeline.py` (Write tool)
+2. Script executed via `python3` (Bash tool)
+3. Claude Code generated `REPORT.md` summarizing results
+
+**Workspace Output:**
+```
+-rw-r--r-- iris_pipeline.py    (1392 bytes)
+-rw-r--r-- results.txt         (499 bytes)
+-rw-r--r-- run_output.txt      (539 bytes)
+-rw-r--r-- REPORT.md           (1700 bytes)
+```
+
+**Results:**
+- Accuracy: 100% (30/30 test samples correct)
+- All 3 species (setosa, versicolor, virginica) classified with precision/recall/f1 = 1.00
+- Pipeline completed in ~43 seconds
+
+### New Components Verified
+
+| Component | File | Verified |
+|---|---|---|
+| CouncilStrategy | oak_mcp/oak-api-proxy/strategies.py | ✅ |
+| ContextManager | memory/context_manager.py | ✅ |
+| EpisodicMemory embeddings | api/events/bus.py | ✅ |
+| Cross-problem retrieval | memory/episodic_repository.py | ✅ |
+| AI Engineer agent | .claude/agents/ai-engineer.md | ✅ |
+| Security Expert agent | .claude/agents/security-expert.md | ✅ |
+| DevOps agent | .claude/agents/devops.md | ✅ |
+| Frontend agent | .claude/agents/frontend.md | ✅ |
+| Self-healing daemon | scripts/oak-daemon.sh | ✅ |
+| AIO Dockerfile | docker/Dockerfile.aio | ✅ |
+| Prebuilt compose | docker/docker-compose.prebuilt.yml | ✅ |
+| GHCR publish workflow | .github/workflows/publish.yml | ✅ |

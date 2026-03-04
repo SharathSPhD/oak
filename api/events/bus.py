@@ -94,7 +94,24 @@ class WebSocketSubscriber(EventSubscriber):
 
 
 class EpisodicMemorySubscriber(EventSubscriber):
-    """Writes task_complete and judge_verdict events to episodes table (no embedding yet)."""
+    """Writes task_complete and judge_verdict events to episodes table with embeddings."""
+
+    @staticmethod
+    async def _generate_embedding(text: str) -> list[float] | None:
+        """Generate embedding via Ollama. Returns None on failure (non-blocking)."""
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    "http://oak-ollama:11434/api/embeddings",
+                    json={"model": "nomic-embed-text", "prompt": text[:8000]},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data.get("embedding")
+        except Exception:
+            pass
+        return None
 
     async def on_event(self, event: AgentEvent) -> None:
         if event.event_type not in ("task_complete", "judge_verdict"):
@@ -105,6 +122,8 @@ class EpisodicMemorySubscriber(EventSubscriber):
             import asyncpg
 
             from api.config import settings as _settings
+            content = _json.dumps(event.payload)
+            embedding = await self._generate_embedding(content)
             conn = await asyncpg.connect(_settings.database_url)
             try:
                 problem_id = (
@@ -114,12 +133,13 @@ class EpisodicMemorySubscriber(EventSubscriber):
                 )
                 await conn.execute(
                     """INSERT INTO episodes
-                       (problem_id, agent_id, event_type, content)
-                       VALUES ($1::uuid, $2, $3, $4)""",
+                       (problem_id, agent_id, event_type, content, embedding)
+                       VALUES ($1::uuid, $2, $3, $4, $5::vector)""",
                     problem_id,
                     event.agent_id,
                     event.event_type,
-                    _json.dumps(event.payload),
+                    content,
+                    embedding if embedding else None,
                 )
             finally:
                 await conn.close()

@@ -39,6 +39,26 @@ class PostgreSQLEpisodicRepository(EpisodicMemoryRepository):
         finally:
             await conn.close()
 
+    async def retrieve_global(
+        self, embedding: list[float], limit: int = 10
+    ) -> list[dict]:
+        """Retrieve similar episodes across all problems."""
+        conn = await asyncpg.connect(self._conn_str)
+        try:
+            rows = await conn.fetch(
+                """SELECT id, problem_id, agent_id, event_type, content,
+                          1 - (embedding <=> $1::vector) as similarity,
+                          created_at
+                   FROM episodes
+                   WHERE embedding IS NOT NULL AND archived_at IS NULL
+                   ORDER BY embedding <=> $1::vector
+                   LIMIT $2""",
+                embedding, limit
+            )
+            return [dict(r) for r in rows]
+        finally:
+            await conn.close()
+
     async def mark_retrieved(self, episode_id: UUID) -> None:
         conn = await asyncpg.connect(self._conn_str)
         try:

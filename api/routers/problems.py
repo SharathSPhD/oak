@@ -50,6 +50,22 @@ async def create_problem(
     return ProblemResponse(**dict(row))
 
 
+@router.get("", response_model=list[ProblemResponse])
+async def list_problems(
+    db: AsyncSession = Depends(get_db),
+) -> list[ProblemResponse]:
+    """List all problems, newest first."""
+    result = await db.execute(
+        text("""
+            SELECT id, title, description, status, solution_url,
+            idempotency_key, created_at, updated_at
+            FROM problems ORDER BY created_at DESC LIMIT 100
+        """),
+    )
+    rows = result.mappings().all()
+    return [ProblemResponse(**dict(r)) for r in rows]
+
+
 @router.get("/{problem_id}", response_model=ProblemResponse)
 async def get_problem(
     problem_id: UUID,

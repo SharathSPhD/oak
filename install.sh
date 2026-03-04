@@ -1,41 +1,56 @@
 #!/bin/bash
-# OAK Tier 3 Installer — auto-detect hardware and start stack
-# Usage: bash install.sh
-# Detects GPU, downloads compose file, pulls models, starts OAK
-
+# OAK Installer — auto-detect hardware and start stack
+# Usage: curl -sL https://raw.githubusercontent.com/SharathSPhD/oak/main/install.sh | bash
+# Or:    bash install.sh [dgx|mini|cloud|aio]
 set -euo pipefail
 
-echo "🌳 OAK Installer — detecting hardware..."
+echo "OAK Installer — detecting hardware..."
 
-# Detect GPU
-DETECTED_MODE="cpu"
+DETECTED_MODE="dgx"
 if command -v nvidia-smi &> /dev/null; then
     DETECTED_MODE="dgx"
-    echo "✓ NVIDIA GPU detected — using DGX mode (Ollama with GPU)"
-elif [[ "$OSTYPE" == "darwin"* ]] && sysctl -a | grep -q "hw.model"; then
-    # macOS with Apple Silicon (M4, etc)
-    if sysctl hw.machine | grep -q "arm64"; then
-        DETECTED_MODE="mini"
-        echo "✓ Apple Silicon detected — using Mini mode (Ollama with Metal)"
-    fi
+    echo "NVIDIA GPU detected — using DGX mode"
+elif [[ "${OSTYPE:-}" == "darwin"* ]]; then
+    DETECTED_MODE="mini"
+    echo "macOS detected — using Mini mode"
 fi
 
 MODE="${1:-$DETECTED_MODE}"
-echo "📦 Starting OAK in $MODE mode..."
 
-# Clone or use existing repo
-if [ ! -d ".git" ]; then
-    echo "ℹ️ Cloning OAK repository..."
-    git clone https://github.com/SharathSPhD/oak.git
-    cd oak
+if [ "$MODE" = "aio" ]; then
+    echo "Starting OAK All-in-One container..."
+    docker run -d \
+        --name oak-aio \
+        -p 8501:8501 \
+        -p 8000:8000 \
+        -p 9000:9000 \
+        -v oak-data:/var/lib/postgresql/data \
+        -v oak-ollama:/root/.ollama \
+        -v oak-workspace:/workspace \
+        ghcr.io/sharathsphd/oak-aio:latest
+    echo ""
+    echo "OAK All-in-One started!"
+    echo "Hub: http://localhost:8501"
+    echo "API: http://localhost:8000"
+    echo "Note: First startup may take a few minutes to initialize the database and pull models."
+    exit 0
 fi
 
-# Run bootstrap
-echo "🔨 Building and starting stack..."
-bash scripts/bootstrap.sh "$MODE"
+echo "Starting OAK in $MODE mode (multi-service)..."
+
+if [ ! -d ".git" ]; then
+    COMPOSE_URL="https://raw.githubusercontent.com/SharathSPhD/oak/main/docker/docker-compose.prebuilt.yml"
+    echo "Downloading compose file..."
+    curl -sL "$COMPOSE_URL" -o docker-compose.yml
+else
+    echo "Using local compose file..."
+    cp docker/docker-compose.prebuilt.yml docker-compose.yml 2>/dev/null || true
+fi
+
+docker compose --profile "$MODE" up -d
 
 echo ""
-echo "✅ OAK is ready!"
-echo "🌐 Hub: http://localhost:8501"
-echo "⚙️  API: http://localhost:8000"
-echo "🔀 Proxy: http://localhost:9000"
+echo "OAK is ready!"
+echo "Hub: http://localhost:8501"
+echo "API: http://localhost:8000"
+echo "Proxy: http://localhost:9000"

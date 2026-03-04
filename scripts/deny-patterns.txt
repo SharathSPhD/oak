@@ -45,3 +45,16 @@ OAK: git push.*main
 OAK: git push.*oak/agents
 OAK: git push.*oak/skills
 OAK: git push.*oak/ui
+
+# Prompt injection defence
+eval\s*\(
+exec\s*\(.*input\(
+__import__.*os.*system
+# Container escape prevention
+nsenter
+unshare
+mount.*proc
+chroot
+# Network exfiltration
+nc\s+-e
+socat.*exec

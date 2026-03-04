@@ -345,3 +345,32 @@ OAK has completed all 6 phases of development. The system is fully operational o
 - Complete documentation + walkthrough
 
 Ready for deployment and live agent problem-solving workflows.
+
+---
+
+## Comprehensive Upgrade (March 2026)
+
+### Status: COMPLETE — all upgrade items implemented and verified
+
+| Upgrade Item | Status | Evidence |
+|---|---|---|
+| Proxy streaming fix (incremental text deltas) | ✅ DONE | Text blocks emitted per-chunk; XML tool calls detected at finish |
+| Default model fixed to qwen3-coder | ✅ DONE | Proxy health shows `ollama_model: qwen3-coder` |
+| Model pulls: deepseek-r1:14b, qwen2.5:14b | ✅ DONE | `ollama list` shows 3 models (46 GB total) |
+| x-oak-model header for role-based routing | ✅ DONE | Proxy accepts header, overrides default model |
+| GET /api/problems list endpoint | ✅ DONE | Gallery page functional |
+| new-problem.sh POST to API first | ✅ DONE | Script creates problem via API, then worktree, then container |
+| Schema alignment (data_manifest, completed_at, tokens, hnsw) | ✅ DONE | schema.sql updated with all missing columns + HNSW indexes |
+| E2E Iris Classification demo | ✅ DONE | iris_pipeline.py → 100% accuracy → REPORT.md generated |
+| CouncilStrategy multi-model routing | ✅ DONE | strategies.py + config.py + proxy registration |
+| Memory: embedding generation via Ollama | ✅ DONE | EpisodicMemorySubscriber calls /api/embeddings |
+| Memory: cross-problem retrieval | ✅ DONE | EpisodicRepository.retrieve_global() |
+| Memory: ContextManager with token budget | ✅ DONE | memory/context_manager.py |
+| New agents: ai-engineer, security-expert, devops, frontend | ✅ DONE | 4 new .claude/agents/*.md files (12 total) |
+| Self-healing daemon (oak-daemon.sh) | ✅ DONE | Health checks, model verification, orphan cleanup |
+| Security: deny-patterns hardened | ✅ DONE | Prompt injection, container escape, exfiltration patterns |
+| Security: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC | ✅ DONE | Dockerfile + compose env |
+| All-in-One Dockerfile (Dockerfile.aio) | ✅ DONE | supervisord-managed single container |
+| Pre-built compose (docker-compose.prebuilt.yml) | ✅ DONE | GHCR images, no local builds |
+| GHCR publish workflow | ✅ DONE | .github/workflows/publish.yml |
+| install.sh updated for AIO + prebuilt | ✅ DONE | Auto-detect GPU, support aio mode |

@@ -55,6 +55,12 @@ class EpisodicMemoryRepository(ABC):
     async def retrieve_similar(self, query_embedding: list[float],
                                top_k: int = 5) -> list[Episode]: ...
 
+    async def retrieve_global(
+        self, embedding: list[float], limit: int = 10
+    ) -> list[dict]:
+        """Retrieve similar episodes across all problems. Default no-op; override in impl."""
+        return []
+
     @abstractmethod
     async def mark_retrieved(self, episode_id: UUID) -> None: ...
 

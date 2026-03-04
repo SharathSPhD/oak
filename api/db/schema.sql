@@ -5,11 +5,13 @@ CREATE TABLE problems (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     title TEXT NOT NULL,
     description TEXT,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','active','complete','failed')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','assembling','active','complete','failed')),
     solution_url TEXT,
+    data_manifest JSONB DEFAULT '{}',
     idempotency_key TEXT UNIQUE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
 );
 
 CREATE TABLE tasks (
@@ -43,12 +45,13 @@ CREATE TABLE episodes (
     event_type TEXT NOT NULL,
     content TEXT NOT NULL,
     embedding vector(1536),
+    importance FLOAT DEFAULT 0.5,
     retrieved_count INTEGER DEFAULT 0,
     last_retrieved_at TIMESTAMPTZ,
     archived_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX ON episodes USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX ON episodes USING hnsw (embedding vector_cosine_ops);
 
 CREATE TABLE skills (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -65,7 +68,7 @@ CREATE TABLE skills (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX ON skills USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX ON skills USING hnsw (embedding vector_cosine_ops);
 
 CREATE TABLE agent_telemetry (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -76,6 +79,9 @@ CREATE TABLE agent_telemetry (
     tool_input JSONB,
     tool_response JSONB,
     duration_ms INTEGER,
+    tokens_in INTEGER DEFAULT 0,
+    tokens_out INTEGER DEFAULT 0,
+    model_used TEXT,
     escalated BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );

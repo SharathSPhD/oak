@@ -1,0 +1,120 @@
+# OAK Pre-built Compose — uses published GHCR images, no local builds
+# Usage: docker compose -f docker/docker-compose.prebuilt.yml --profile dgx up
+services:
+  oak-postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    networks: [oak-net]
+    environment:
+      POSTGRES_USER: oak
+      POSTGRES_PASSWORD: oak
+      POSTGRES_DB: oak
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  oak-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [oak-net]
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  oak-ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    networks: [oak-net]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles: ["dgx"]
+
+  oak-api:
+    image: ghcr.io/sharathsphd/oak-api:latest
+    restart: unless-stopped
+    networks: [oak-net]
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://oak:oak@oak-postgres:5432/oak
+      REDIS_URL: redis://oak-redis:6379
+    depends_on:
+      oak-postgres:
+        condition: service_healthy
+      oak-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    profiles: ["dgx", "mini", "cloud"]
+
+  oak-api-proxy:
+    image: ghcr.io/sharathsphd/oak-proxy:latest
+    restart: unless-stopped
+    networks: [oak-net]
+    ports:
+      - "9000:9000"
+    environment:
+      REDIS_URL: redis://oak-redis:6379
+      OLLAMA_BASE_URL: http://oak-ollama:11434
+      OLLAMA_DEFAULT_MODEL: qwen3-coder
+      ROUTING_STRATEGY: passthrough
+    depends_on:
+      - oak-redis
+    profiles: ["dgx", "mini", "cloud"]
+
+  oak-ui:
+    image: ghcr.io/sharathsphd/oak-ui:latest
+    restart: unless-stopped
+    networks: [oak-net]
+    ports:
+      - "8501:8501"
+    environment:
+      OAK_API_URL: http://oak-api:8000
+    depends_on:
+      - oak-api
+    profiles: ["dgx", "mini", "cloud"]
+
+  oak-harness:
+    image: ghcr.io/sharathsphd/oak-harness:latest
+    restart: "no"
+    networks: [oak-net]
+    environment:
+      ANTHROPIC_BASE_URL: http://oak-api-proxy:9000
+      ANTHROPIC_AUTH_TOKEN: ollama
+      ANTHROPIC_API_KEY: "ollama"
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+    profiles: ["dgx", "mini", "cloud"]
+
+networks:
+  oak-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  ollama-models:

@@ -16,6 +16,7 @@ class RoutingStrategy(StrEnum):
     PASSTHROUGH  = "passthrough"
     STALL        = "stall"
     CONFIDENCE   = "confidence"
+    COUNCIL      = "council"
 
 
 class OAKSettings(BaseSettings):
@@ -42,6 +43,8 @@ class OAKSettings(BaseSettings):
     stall_phrases: list[str]          = Field(
         default=["i cannot", "i don't know how", "i'm unable", "as an ai"])
     local_confidence_threshold: float = 0.8
+    council_models: list[str] = Field(default=["qwen3-coder", "deepseek-r1:14b"])
+    council_judge_model: str = "deepseek-r1:14b"
 
     # -- Resource caps ------------------------------------------------------------
     max_agents_per_problem: int   = 10

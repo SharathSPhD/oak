@@ -1,0 +1,61 @@
+# OAK All-in-One Container
+# Single container running postgres, redis, ollama, api, proxy, ui via supervisord
+# Usage: docker run -p 8501:8501 -p 8000:8000 -p 9000:9000 ghcr.io/sharathsphd/oak-aio:latest
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# System dependencies
+RUN apt-get update && apt-get install -y \
+    curl wget git python3 python3-pip python3-venv \
+    postgresql postgresql-contrib \
+    redis-server \
+    supervisor \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node.js 20 for Claude Code
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs
+
+# Ollama
+RUN curl -fsSL https://ollama.com/install.sh | sh
+
+# pgvector extension
+RUN apt-get update && apt-get install -y postgresql-16-pgvector 2>/dev/null \
+    || echo "pgvector will be installed from source if needed" \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python dependencies
+RUN pip3 install --no-cache-dir \
+    fastapi uvicorn[standard] httpx redis sqlalchemy[asyncio] asyncpg \
+    pydantic pydantic-settings pgvector \
+    streamlit pandas numpy scikit-learn plotly \
+    requests
+
+# Install Claude Code
+RUN npm install -g @anthropic-ai/claude-code
+
+# Copy application code
+COPY api/ /opt/oak/api/
+COPY memory/ /opt/oak/memory/
+COPY oak_mcp/oak-api-proxy/ /opt/oak/proxy/
+COPY ui/ /opt/oak/ui/
+COPY scripts/ /opt/oak/scripts/
+COPY docker/claude-harness/scripts/ /opt/oak/harness-scripts/
+
+# Supervisord config
+RUN mkdir -p /var/log/supervisor /var/run/supervisor
+COPY docker/supervisord.conf /etc/supervisor/conf.d/oak.conf
+
+# Init script
+COPY docker/aio-entrypoint.sh /opt/oak/entrypoint.sh
+RUN chmod +x /opt/oak/entrypoint.sh
+
+# Volumes for persistence
+VOLUME ["/var/lib/postgresql/data", "/var/lib/redis", "/root/.ollama", "/workspace"]
+
+# Ports: API, UI, Proxy
+EXPOSE 8000 8501 9000
+
+ENTRYPOINT ["/opt/oak/entrypoint.sh"]

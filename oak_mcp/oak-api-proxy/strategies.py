@@ -47,3 +47,40 @@ class ConfidenceThresholdStrategy(RoutingStrategy):
     ) -> bool:
         confidence = local_response.get("confidence", 1.0)
         return confidence < self.threshold
+
+
+class CouncilStrategy(RoutingStrategy):
+    """Fan-out prompt to multiple local models, use a judge model to pick the best.
+
+    Activated via ROUTING_STRATEGY=council. Only invoked when the primary model
+    produces an uncertain response. In passthrough mode, acts like PassthroughStrategy.
+    """
+    def __init__(self, council_models: list[str], judge_model: str) -> None:
+        self.council_models = council_models
+        self.judge_model = judge_model
+
+    async def should_escalate(
+        self, request_body: dict, local_response: dict
+    ) -> bool:
+        return False
+
+    async def select_best(
+        self, responses: list[dict], original_prompt: str
+    ) -> dict:
+        """Given multiple model responses, return the best one.
+        For now, returns the longest non-empty response (heuristic).
+        Full judge-model synthesis is Phase 5+.
+        """
+        best = {}
+        best_len = 0
+        for resp in responses:
+            text = ""
+            for block in resp.get("content", []):
+                if block.get("type") == "text":
+                    text += block.get("text", "")
+                elif block.get("type") == "tool_use":
+                    text += str(block.get("input", {}))
+            if len(text) > best_len:
+                best = resp
+                best_len = len(text)
+        return best or responses[0] if responses else {}
