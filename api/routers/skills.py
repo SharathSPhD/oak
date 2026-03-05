@@ -19,8 +19,8 @@ router = APIRouter(prefix="/api/skills", tags=["skills"])
 async def list_skills(
     query: str | None = Query(default=None),
     category: str | None = Query(default=None),
-    status: str = Query(default="permanent"),
-    top_k: int = Query(default=10, ge=1, le=50),
+    status: str | None = Query(default=None),
+    top_k: int = Query(default=50, ge=1, le=500),
 ) -> list[dict[str, Any]]:
     repo = PostgreSQLSkillRepository()
     try:
@@ -29,12 +29,15 @@ async def list_skills(
         else:
             conn = await asyncpg.connect(settings.database_url)
             try:
-                params: list[str] = [status]
-                q = "SELECT * FROM skills WHERE status = $1"
+                params: list[object] = []
+                q = "SELECT * FROM skills WHERE 1=1"
+                if status and status != "all":
+                    params.append(status)
+                    q += f" AND status = ${len(params)}"
                 if category:
                     params.append(category)
                     q += f" AND category = ${len(params)}"
-                q += " ORDER BY use_count DESC LIMIT 50"
+                q += f" ORDER BY use_count DESC LIMIT {top_k}"
                 rows = await conn.fetch(q, *params)
                 skills = [_row_to_skill(r) for r in rows]
             finally:
@@ -46,11 +49,49 @@ async def list_skills(
                 "status": s.status, "use_count": s.use_count,
                 "verified_on_problems": [str(p) for p in s.verified_on_problems],
                 "filesystem_path": s.filesystem_path,
+                "created_at": getattr(s, "created_at", None),
             }
             for s in skills
         ]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("")
+async def create_skill(body: dict[str, Any]) -> dict[str, Any]:
+    """Create a new probationary skill."""
+    name = body.get("name", "")
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    description = body.get("description", "")
+    category = body.get("category", "general")
+    keywords = body.get("trigger_keywords", [])
+    problem_id = body.get("problem_id")
+
+    skill_id = uuid_mod.uuid4()
+    conn = await asyncpg.connect(settings.database_url)
+    try:
+        verified = [problem_id] if problem_id else []
+        await conn.execute(
+            """
+            INSERT INTO skills (id, name, description, category,
+                trigger_keywords, status, verified_on_problems)
+            VALUES ($1, $2, $3, $4, $5, 'probationary', $6)
+            ON CONFLICT (name) DO UPDATE SET
+                use_count = skills.use_count + 1,
+                verified_on_problems = array_cat(
+                    skills.verified_on_problems,
+                    $6::uuid[]
+                )
+            """,
+            skill_id, name, description, category,
+            keywords, verified,
+        )
+        return {"id": str(skill_id), "name": name, "status": "probationary"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        await conn.close()
 
 
 @router.post("/{skill_id}/promote")

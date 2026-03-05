@@ -5,9 +5,8 @@ __pattern__ = "Strategy"
 
 import logging
 import re
-from html.parser import HTMLParser
 from typing import TYPE_CHECKING
-from urllib.parse import quote_plus
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 import httpx
 
@@ -18,66 +17,58 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("oak.builder.actions.learning")
 
+_BROWSER_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
 
-class _DuckDuckGoResultParser(HTMLParser):
-    """Parse DuckDuckGo HTML results for links and snippets."""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.results: list[dict[str, str]] = []
-        self._in_result = False
-        self._current_link: str | None = None
-        self._current_snippet: str = ""
-        self._in_snippet = False
-        self._in_link = False
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attrs_d = dict((k, v or "") for k, v in attrs)
-        if tag == "a" and "result__a" in attrs_d.get("class", ""):
-            self._in_link = True
-            href = attrs_d.get("href", "")
-            if href.startswith("http") and "duckduckgo.com" not in href:
-                self._current_link = href
-        elif tag == "a" and self._in_result and "result__snippet" in attrs_d.get("class", ""):
-            self._in_snippet = True
-        if tag == "div" and "result__body" in attrs_d.get("class", ""):
-            self._in_result = True
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "div" and self._in_result:
-            if self._current_link and self._current_snippet:
-                self.results.append({
-                    "url": self._current_link,
-                    "snippet": self._current_snippet[:500].strip(),
-                })
-            self._in_result = False
-            self._current_link = None
-            self._current_snippet = ""
-        if tag == "a":
-            self._in_link = False
-            self._in_snippet = False
-
-    def handle_data(self, data: str) -> None:
-        if self._in_snippet or (self._in_link and self._in_result):
-            self._current_snippet = (self._current_snippet + " " + data).strip()
+def _extract_real_url(href: str) -> str | None:
+    """Extract real URL from DuckDuckGo redirect links."""
+    if "uddg=" in href:
+        parsed = urlparse(href if href.startswith("http") else f"https:{href}")
+        qs = parse_qs(parsed.query)
+        uddg = qs.get("uddg", [None])[0]
+        if uddg:
+            return unquote(uddg)
+    if href.startswith("http") and "duckduckgo.com" not in href:
+        return href
+    return None
 
 
 def _parse_ddg_html(html: str) -> list[dict[str, str]]:
-    """Extract top result links and snippets from DuckDuckGo HTML."""
-    parser = _DuckDuckGoResultParser()
-    try:
-        parser.feed(html)
-        return parser.results[:5]
-    except Exception:
-        pass
+    """Extract top result links and snippets from DuckDuckGo HTML via regex."""
     results: list[dict[str, str]] = []
-    link_pattern = re.compile(r'href="(https?://[^"]+)"[^>]*class="[^"]*result__a')
-    for m in link_pattern.finditer(html):
-        url = m.group(1)
-        if "duckduckgo.com" in url:
-            continue
-        results.append({"url": url, "snippet": ""})
-        if len(results) >= 5:
+    link_re = re.compile(
+        r'class="[^"]*result__a[^"]*"\s+href="([^"]+)"'
+        r"|"
+        r'href="([^"]+)"[^>]*class="[^"]*result__a[^"]*"',
+        re.DOTALL,
+    )
+    snippet_re = re.compile(
+        r'class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>',
+        re.DOTALL,
+    )
+    links = []
+    for m in link_re.finditer(html):
+        raw = m.group(1) or m.group(2)
+        real = _extract_real_url(raw)
+        if real:
+            links.append((real, m.start()))
+
+    snippets_by_pos: list[tuple[str, int]] = []
+    for m in snippet_re.finditer(html):
+        text = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+        snippets_by_pos.append((text, m.start()))
+
+    for url, pos in links:
+        snippet = ""
+        for stxt, spos in snippets_by_pos:
+            if spos > pos:
+                snippet = stxt[:500]
+                break
+        results.append({"url": url, "snippet": snippet})
+        if len(results) >= 8:
             break
     return results
 
@@ -98,9 +89,23 @@ class WebResearch(Action):
         return 0.2
 
     async def execute(self, state: CortexState) -> ActionResult:
+        import random
+
         pending = getattr(state, "pending_research", [])
         if not pending:
-            query = "OAK autonomous builder analytics"
+            _default_queries = [
+                "best practices multi-agent AI systems 2025",
+                "ollama model performance benchmarks 2025",
+                "autonomous AI software factory architecture",
+                "data science pipeline automation best practices",
+                "pgvector RAG retrieval augmented generation optimization",
+                "self-improving AI agent architecture patterns",
+                "small language model code generation comparison",
+                "pandas data analysis advanced techniques",
+                "fastapi production best practices async",
+                "docker container orchestration self-healing patterns",
+            ]
+            query = random.choice(_default_queries)
         else:
             first = pending[0]
             query = str(first) if isinstance(first, str) else str(first.get("query", ""))
@@ -110,7 +115,7 @@ class WebResearch(Action):
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(
                     url,
-                    headers={"User-Agent": "OAK-Builder/1.0"},
+                    headers={"User-Agent": _BROWSER_UA},
                 )
                 if resp.status_code != 200:
                     return ActionResult(

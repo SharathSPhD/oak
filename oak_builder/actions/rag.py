@@ -39,14 +39,14 @@ class BuildRagIndex(Action):
         return "rag"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        if state.get("knowledge_to_index"):
+        if getattr(state, "knowledge_to_index", None):
             return 0.9
-        if state.get("rag_index_stale"):
+        if getattr(state, "rag_index_stale", None):
             return 0.6
         return 0.2
 
     async def execute(self, state: CortexState) -> ActionResult:
-        knowledge = state.get("knowledge_to_index", "")
+        knowledge = getattr(state, "knowledge_to_index", "")
         if not knowledge:
             knowledge_path = Path(self.repo_path) / "domain_knowledge.txt"
             if knowledge_path.exists():
@@ -154,12 +154,12 @@ class EvaluateRagQuality(Action):
         return "rag"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        if state.get("rag_index_built") or state.get("evaluate_rag_pending"):
+        if getattr(state, "rag_index_built", None) or getattr(state, "evaluate_rag_pending", None):
             return 0.8
         return 0.4
 
     async def execute(self, state: CortexState) -> ActionResult:
-        test_queries = state.get("rag_test_queries", [
+        test_queries = getattr(state, "rag_test_queries", [
             "What is the domain model?",
             "How does ETL work?",
             "What are the skill categories?",

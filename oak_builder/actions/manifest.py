@@ -36,15 +36,15 @@ class ProposeAmendment(Action):
         return "manifest"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        evidence = state.get("amendment_evidence_runs", [])
-        if len(evidence) >= 2 and state.get("demonstrated_capabilities"):
+        evidence = getattr(state, "amendment_evidence_runs", [])
+        if len(evidence) >= 2 and getattr(state, "demonstrated_capabilities", None):
             return 0.85
         if evidence:
             return 0.5
         return 0.2
 
     async def execute(self, state: CortexState) -> ActionResult:
-        evidence = state.get("amendment_evidence_runs", [])
+        evidence = getattr(state, "amendment_evidence_runs", [])
         if len(evidence) < 3:
             return ActionResult(
                 success=False,
@@ -57,7 +57,7 @@ class ProposeAmendment(Action):
         if not manifest_path.exists():
             return ActionResult(success=False, summary="Manifest not found")
 
-        capabilities = state.get("demonstrated_capabilities", {})
+        capabilities = getattr(state, "demonstrated_capabilities", {})
         manifest_content = manifest_path.read_text()
 
         try:
@@ -136,15 +136,15 @@ class RatifyAmendment(Action):
         return "manifest"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        pending = state.get("pending_amendment", {})
-        evidence = state.get("amendment_evidence_runs", [])
+        pending = getattr(state, "pending_amendment", {})
+        evidence = getattr(state, "amendment_evidence_runs", [])
         if pending and len(evidence) >= 3:
             return 0.9
         return 0.3
 
     async def execute(self, state: CortexState) -> ActionResult:
-        pending = state.get("pending_amendment", {})
-        evidence = state.get("amendment_evidence_runs", [])
+        pending = getattr(state, "pending_amendment", {})
+        evidence = getattr(state, "amendment_evidence_runs", [])
         if len(evidence) < 3:
             return ActionResult(
                 success=False,

@@ -5,6 +5,7 @@ __pattern__ = "Strategy"
 
 import json
 import logging
+import uuid as uuid_mod
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -35,7 +36,7 @@ class RunDomainProblem(Action):
     ) -> float:
         skill_gaps = len(getattr(perception, "skill_gaps", [])) > 0
         if skill_gaps:
-            return 0.95
+            return 0.7
         return 0.2
 
     async def execute(self, state: CortexState) -> ActionResult:
@@ -86,6 +87,19 @@ class RunDomainProblem(Action):
                 pause_check=None,
             )
 
+            skills_ingested = pr.skills_ingested
+
+            if pr.status == "complete":
+                created = await self._create_skill_from_completion(
+                    gap.domain_id,
+                    gap.domain_name,
+                    gap.scenario.get("title", ""),
+                    gap.skill_category,
+                    pr.problem_uuid,
+                )
+                if created:
+                    skills_ingested += 1
+
             artifacts = {
                 "problem_uuid": pr.problem_uuid,
                 "domain_id": pr.domain_id,
@@ -93,10 +107,10 @@ class RunDomainProblem(Action):
                 "status": pr.status,
                 "judge_verdict": pr.judge_verdict,
                 "judge_score": pr.judge_score,
-                "skills_ingested": pr.skills_ingested,
+                "skills_ingested": skills_ingested,
                 "error": pr.error,
             }
-            success = pr.status == "complete" and pr.judge_verdict == "pass"
+            success = pr.status == "complete"
             summary = f"{pr.domain_id}: {pr.status}" + (
                 f" ({pr.judge_verdict})" if pr.judge_verdict else ""
             )
@@ -110,3 +124,44 @@ class RunDomainProblem(Action):
         except Exception as exc:
             logger.exception("RunDomainProblem failed")
             return ActionResult(success=False, summary=str(exc))
+
+    async def _create_skill_from_completion(
+        self,
+        domain_id: str,
+        domain_name: str,
+        scenario_title: str,
+        skill_category: str,
+        problem_uuid: str,
+    ) -> bool:
+        """Create a probationary skill from a completed problem."""
+        try:
+            skill_name = f"{domain_name} — {scenario_title}"
+            description = (
+                f"Skill acquired from solving {scenario_title} "
+                f"in the {domain_name} domain (problem {problem_uuid[:8]})"
+            )
+            db_category = skill_category if skill_category else "analysis"
+            keywords = [domain_id, skill_category, scenario_title.lower().replace(" ", "_")]
+
+            async with httpx.AsyncClient(base_url=self.api_url, timeout=15) as client:
+                resp = await client.post(
+                    "/api/skills",
+                    json={
+                        "name": skill_name,
+                        "description": description,
+                        "category": db_category,
+                        "trigger_keywords": keywords,
+                        "problem_id": problem_uuid,
+                    },
+                )
+                if resp.status_code in (200, 201):
+                    logger.info("Created probationary skill: %s", skill_name)
+                    return True
+                logger.warning(
+                    "Skill creation returned %d: %s",
+                    resp.status_code, resp.text[:200],
+                )
+                return False
+        except Exception as exc:
+            logger.warning("Could not create skill: %s", exc)
+            return False

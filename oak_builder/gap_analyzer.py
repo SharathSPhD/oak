@@ -9,6 +9,7 @@ __pattern__ = "Strategy"
 
 import json
 import logging
+import random
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -100,6 +101,7 @@ async def analyze_gaps(
                 scenario=selected,
             ))
 
+    random.shuffle(gaps)
     gaps.sort(key=lambda g: g.gap_score, reverse=True)
     selected = gaps[:top_n]
 

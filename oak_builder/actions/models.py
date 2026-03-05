@@ -15,6 +15,15 @@ logger = logging.getLogger("oak.builder.actions.models")
 
 OLLAMA_DIRECT = "http://oak-ollama:11434"
 
+RECOMMENDED_MODELS = [
+    "deepseek-r1:14b",
+    "qwen2.5:14b",
+    "nomic-embed-text",
+    "llama3.1:8b",
+    "gemma3:12b",
+    "phi4:14b",
+]
+
 
 class PullModel(Action):
     """Pull an Ollama model and verify with benchmark."""
@@ -39,24 +48,41 @@ class PullModel(Action):
         return "models"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        harvest = state.get("harvest_hf", {})
+        harvest = getattr(state, "harvest_hf", {})
         if harvest.get("promising_model"):
             return 0.9
-        models = state.get("available_models", [])
-        if len(models) <= 1 and models:
-            return 0.7
-        if harvest or models:
-            return 0.5
+        models = getattr(perception, "available_models", [])
+        if len(models) < len(RECOMMENDED_MODELS):
+            return 0.75
         return 0.2
 
     async def execute(self, state: CortexState) -> ActionResult:
+        already_pulled: set[str] = set()
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                tags_resp = await client.get(f"{OLLAMA_DIRECT}/api/tags")
+                if tags_resp.status_code == 200:
+                    for m in tags_resp.json().get("models", []):
+                        already_pulled.add(m.get("name", ""))
+        except httpx.HTTPError:
+            pass
+
         model_name = (
-            state.get("harvest_hf", {}).get("promising_model")
-            or state.get("model_to_pull")
-            or (state.get("available_models", [None])[0] if state.get("available_models") else None)
+            getattr(state, "harvest_hf", {}).get("promising_model")
+            or getattr(state, "model_to_pull", None)
         )
+
         if not model_name:
-            return ActionResult(success=False, summary="No model name to pull")
+            for rec in RECOMMENDED_MODELS:
+                if not any(rec.split(":")[0] in p for p in already_pulled):
+                    model_name = rec
+                    break
+
+        if not model_name:
+            return ActionResult(
+                success=True,
+                summary=f"All recommended models already pulled ({len(already_pulled)} available)",
+            )
 
         try:
             async with httpx.AsyncClient(timeout=300) as client:
@@ -138,7 +164,7 @@ class BenchmarkModels(Action):
         return "models"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        models = state.get("available_models", [])
+        models = getattr(state, "available_models", [])
         if len(models) >= 2:
             return 0.7
         if len(models) == 1:
@@ -146,28 +172,38 @@ class BenchmarkModels(Action):
         return 0.1
 
     async def execute(self, state: CortexState) -> ActionResult:
-        models = state.get("available_models", [])
-        if len(models) < 2:
-            return ActionResult(success=False, summary="Need at least 2 models to benchmark")
-
-        model_a, model_b = models[0], models[1]
+        available: list[str] = []
         try:
-            async with httpx.AsyncClient(base_url=self.api_url, timeout=120) as client:
-                score_a = await _run_canonical_problem(client, model_a)
-                score_b = await _run_canonical_problem(client, model_b)
+            async with httpx.AsyncClient(timeout=30) as client:
+                tags_resp = await client.get(f"{OLLAMA_DIRECT}/api/tags")
+                if tags_resp.status_code == 200:
+                    for m in tags_resp.json().get("models", []):
+                        name = m.get("name", "")
+                        if name and "embed" not in name:
+                            available.append(name)
+        except httpx.HTTPError:
+            pass
+
+        if len(available) < 2:
+            return ActionResult(success=False, summary=f"Need at least 2 models to benchmark, found {len(available)}")
+
+        model_a, model_b = available[0], available[1]
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                bench_a = await _run_small_benchmark(client, model_a)
+                bench_b = await _run_small_benchmark(client, model_b)
 
             benchmarks = {
-                model_a: score_a,
-                model_b: score_b,
+                model_a: bench_a,
+                model_b: bench_b,
             }
-            state.setdefault("model_benchmarks", {})
-            state["model_benchmarks"].update(benchmarks)
 
             return ActionResult(
                 success=True,
+                summary=f"Benchmarked {model_a} vs {model_b}",
                 artifacts={
                     "benchmarks": benchmarks,
-                    "winner": model_a if score_a >= score_b else model_b,
+                    "winner": model_a if bench_a.get("duration_ms", 99999) <= bench_b.get("duration_ms", 99999) else model_b,
                 },
             )
         except Exception as exc:
@@ -225,8 +261,8 @@ class UpdateRouting(Action):
         return "models"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        benchmarks = state.get("model_benchmarks", {})
-        model_for_role = state.get("model_for_role", {})
+        benchmarks = getattr(state, "model_benchmarks", {})
+        model_for_role = getattr(state, "model_for_role", {})
         if benchmarks and model_for_role:
             for _role, current in model_for_role.items():
                 for model, score in benchmarks.items():
@@ -235,8 +271,8 @@ class UpdateRouting(Action):
         return 0.3
 
     async def execute(self, state: CortexState) -> ActionResult:
-        benchmarks = state.get("model_benchmarks", {})
-        model_for_role = state.get("model_for_role", {})
+        benchmarks = getattr(state, "model_benchmarks", {})
+        model_for_role = getattr(state, "model_for_role", {})
         if not benchmarks:
             return ActionResult(success=False, summary="No benchmark data available")
 

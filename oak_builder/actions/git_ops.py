@@ -38,13 +38,13 @@ class OpenBranch(Action):
         return "git"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        if state.get("needs_branch") or not state.get("current_branch"):
+        if getattr(state, "needs_branch", None) or not getattr(state, "current_branch", None):
             return 0.8
         return 0.3
 
     async def execute(self, state: CortexState) -> ActionResult:
         timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M")
-        scope = state.get("scope", "self-build")
+        scope = getattr(state, "scope", "self-build")
         worktree_path = f"/oak-builder-wt/self-{timestamp}-{scope}"
         branch_name = f"self/{timestamp}-{scope}"
 
@@ -103,12 +103,12 @@ class PrReview(Action):
         return "git"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        if state.get("pending_review"):
+        if getattr(state, "pending_review", None):
             return 0.9
         return 0.4
 
     async def execute(self, state: CortexState) -> ActionResult:
-        worktree = state.get("worktree_path", self.repo_path)
+        worktree = getattr(state, "worktree_path", self.repo_path)
         try:
             proc = await asyncio.create_subprocess_exec(
                 "git",
@@ -214,12 +214,12 @@ class RunAcceptance(Action):
         return "git"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        if state.get("acceptance_pending"):
+        if getattr(state, "acceptance_pending", None):
             return 0.95
         return 0.5
 
     async def execute(self, state: CortexState) -> ActionResult:
-        worktree = state.get("worktree_path", self.repo_path)
+        worktree = getattr(state, "worktree_path", self.repo_path)
         results: dict[str, bool] = {}
 
         try:
@@ -249,9 +249,9 @@ class RunAcceptance(Action):
             results["tier1_pytest"] = proc.returncode == 0
 
             results["tier2_judge"] = False
-            if state.get("problem_id"):
+            if getattr(state, "problem_id", None):
                 async with httpx.AsyncClient(base_url=self.api_url, timeout=30) as client:
-                    v = await client.get(f"/api/problems/{state['problem_id']}/verdict")
+                    v = await client.get(f"/api/problems/{getattr(state, 'problem_id', None)}/verdict")
                     if v.status_code == 200:
                         data = v.json()
                         results["tier2_judge"] = data.get("verdict") == "pass"
@@ -291,17 +291,17 @@ class MergeToMain(Action):
         return "git"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        if state.get("acceptance_passed") and state.get("branch"):
+        if getattr(state, "acceptance_passed", None) and getattr(state, "branch", None):
             return 0.9
         return 0.3
 
     async def execute(self, state: CortexState) -> ActionResult:
-        acceptance = state.get("acceptance_tiers", {})
+        acceptance = getattr(state, "acceptance_tiers", {})
         if not all(acceptance.values()) if acceptance else True:
             return ActionResult(success=False, summary="Acceptance must pass before merge")
 
-        worktree = state.get("worktree_path")
-        branch = state.get("branch", "self/unknown")
+        worktree = getattr(state, "worktree_path", None)
+        branch = getattr(state, "branch", "self/unknown")
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -388,7 +388,7 @@ class PushToRemote(Action):
         return "git"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        if state.get("merge_complete") and state.get("push_pending"):
+        if getattr(state, "merge_complete", None) and getattr(state, "push_pending", None):
             return 0.9
         return 0.4
 

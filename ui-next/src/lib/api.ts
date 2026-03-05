@@ -101,18 +101,23 @@ export interface WorkspaceFile {
 export interface BuilderStatus {
   status: string;
   builder_enabled: boolean;
+  cycle_count?: number;
+  last_action?: string;
+  last_action_result?: string;
+  last_action_time?: string;
+  thoughts?: string[];
   circuit_breaker: {
     state: string;
     consecutive_failures: number;
   };
-  current_sprint: number | null;
+  current_sprint: Record<string, unknown> | null;
   last_sprint_result: {
-    sprint: number;
+    sprint?: number;
     passed: number;
     failed: number;
     skills: number;
     committed: boolean;
-    breaker: string;
+    breaker?: string;
   } | null;
 }
 
@@ -126,15 +131,22 @@ export interface BuilderHistory {
   recent_sprints: Array<{
     sprint_number: number;
     started_at: string;
-    finished_at: string;
+    finished_at?: string;
     problems_submitted: number;
     problems_passed: number;
-    problems_failed: number;
     skills_ingested: number;
     changes_committed: boolean;
     circuit_breaker_state: string;
-    domain_results: Record<string, unknown>;
+    action?: string;
+    summary?: string;
+    success?: boolean;
+    domain_results?: Record<string, unknown>;
   }>;
+}
+
+export interface BuilderThoughts {
+  thoughts: string[];
+  total: number;
 }
 
 // -- API functions --
@@ -216,12 +228,16 @@ export const api = {
   builder: {
     status: () => apiFetch<BuilderStatus>("/api/builder/status"),
     history: () => apiFetch<BuilderHistory>("/api/builder/history"),
+    thoughts: () => apiFetch<BuilderThoughts>("/api/builder/thoughts"),
+    cortexState: () => apiFetch<BuilderStatus>("/api/builder/cortex-state"),
     startSprint: () =>
       apiFetch<{ status: string }>("/api/builder/start-sprint", { method: "POST" }),
     pause: () =>
       apiFetch<{ status: string }>("/api/builder/pause", { method: "POST" }),
     resume: () =>
       apiFetch<{ status: string }>("/api/builder/resume", { method: "POST" }),
+    stop: () =>
+      apiFetch<{ status: string; harnesses_stopped?: number }>("/api/builder/stop", { method: "POST" }),
   },
 
   telemetry: () => apiFetch<TelemetryData>("/api/telemetry"),

@@ -33,10 +33,9 @@ class AuditSelf(Action):
         self, state: CortexState, perception: Perception
     ) -> float:
         cycle_count = getattr(state, "cycle_count", 0)
-        recent_failures = getattr(state, "recent_failures", [])
-        if cycle_count % 10 == 0 or len(recent_failures) > 0:
-            return 0.9
-        return 0.3
+        if cycle_count % 20 == 0:
+            return 0.7
+        return 0.25
 
     async def execute(self, state: CortexState) -> ActionResult:
         manifest_path = MANIFEST_DOMAINS_PATH
@@ -139,9 +138,15 @@ class ReplayFailure(Action):
         self, state: CortexState, perception: Perception
     ) -> float:
         recent_failures = getattr(state, "recent_failures", [])
-        if len(recent_failures) > 0:
-            return 0.9
-        return 0.2
+        if not recent_failures:
+            return 0.1
+        recent_replays = sum(
+            1 for s in getattr(state, "recent_successes", [])[-10:]
+            if s.get("action") == "replay_failure"
+        )
+        if recent_replays >= 2:
+            return 0.15
+        return 0.5
 
     async def execute(self, state: CortexState) -> ActionResult:
         try:

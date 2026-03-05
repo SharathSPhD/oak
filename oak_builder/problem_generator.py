@@ -38,7 +38,11 @@ Requirements:
 - Include these columns at minimum: {required_columns}
 - Add 2-3 additional realistic columns relevant to the domain
 - Data should have realistic distributions (not uniform/constant)
-- Include some missing values (< 10%) for realism
+- Include some missing values (< 10%) ONLY in string/categorical columns, never in numeric columns
+- CRITICAL: Do NOT assign NaN, None, or np.nan to integer or float columns. All numeric columns must contain only valid numbers.
+- Do NOT use np.nan with integer arrays or as values in integer columns
+- If using np.random.choice with probabilities, ensure probabilities sum EXACTLY to 1.0 (use p=[...] and normalize: p = np.array(p); p = p/p.sum())
+- Avoid timedelta with numpy int types - cast to int() first: timedelta(days=int(val))
 - Include date columns where appropriate (ISO format)
 - Save to the path specified in the variable OUTPUT_PATH
 
@@ -145,7 +149,11 @@ def validate_synthetic_dataset(
     domain_id: str,
     required_columns: list[str] | None = None,
 ) -> bool:
-    """Validate a generated CSV meets quality thresholds."""
+    """Validate a generated CSV meets quality thresholds.
+
+    Also sanitizes numeric columns by filling NaN with column median
+    to prevent downstream integer conversion errors.
+    """
     try:
         df = pd.read_csv(csv_path)
     except Exception:
@@ -162,6 +170,14 @@ def validate_synthetic_dataset(
         return False
 
     numeric = df.select_dtypes(include="number")
+    for col in numeric.columns:
+        if df[col].isnull().any():
+            median_val = df[col].median()
+            if pd.isna(median_val):
+                median_val = 0
+            df[col] = df[col].fillna(median_val)
+            logger.info("Filled NaN in numeric column '%s' with median", col)
+
     if len(numeric.columns) > 0 and numeric.std().min() == 0:
         logger.warning("Zero-variance numeric column detected")
         return False
@@ -172,6 +188,11 @@ def validate_synthetic_dataset(
             if col.lower() not in existing:
                 logger.warning("Missing required column: %s", col)
                 return False
+
+    try:
+        df.to_csv(csv_path, index=False)
+    except Exception as exc:
+        logger.warning("Could not re-save sanitized CSV: %s", exc)
 
     return True
 

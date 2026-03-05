@@ -4,12 +4,13 @@
 
 set -euo pipefail
 
-BUILDER_CONTAINER="${BUILDER_CONTAINER:-docker_oak-builder_1}"
+BUILDER_CONTAINER="${BUILDER_CONTAINER:-docker-oak-builder-1}"
 OAK_ROOT="${OAK_ROOT:-/home/sharaths/projects/oak}"
 COMPOSE_FILE="${OAK_ROOT}/docker/docker-compose.yml"
 SIGNALS_DIR="/watchdog/signals"
 HEARTBEAT_FILE="/watchdog/watchdog_heartbeat.json"
-HEARTBEAT_URL="${OAK_BUILDER_HEARTBEAT_URL:-http://localhost:8080/health}"
+CORTEX_STATE_PATH="/workspaces/builder/cortex_state.json"
+STALE_THRESHOLD_SECONDS=1800  # 30 minutes
 HEALTH_TIMEOUT=60
 HEALTH_POLL_INTERVAL=2
 POLL_INTERVAL=5
@@ -96,11 +97,11 @@ process_replace_signal() {
     return 1
   fi
 
-  # Health-check new container
+  # Health-check new container via cortex_state.json file existence
   local elapsed=0
   local healthy=0
   while [[ $elapsed -lt $HEALTH_TIMEOUT ]]; do
-    if docker exec oak-builder-next curl -sf --max-time 5 "${HEARTBEAT_URL}" >/dev/null 2>&1; then
+    if docker exec oak-builder-next test -f "${CORTEX_STATE_PATH}" 2>/dev/null; then
       healthy=1
       break
     fi
@@ -128,12 +129,33 @@ process_replace_signal() {
   log "REPLACE complete: ${new_image} is now ${BUILDER_CONTAINER}"
 }
 
+builder_stale() {
+  # Check if cortex_state.json hasn't been updated in STALE_THRESHOLD_SECONDS
+  local state_mtime
+  state_mtime=$(docker exec "${BUILDER_CONTAINER}" stat -c '%Y' "${CORTEX_STATE_PATH}" 2>/dev/null) || return 1
+  local now
+  now=$(date +%s)
+  local age=$(( now - state_mtime ))
+  if [[ $age -gt $STALE_THRESHOLD_SECONDS ]]; then
+    log "Builder cortex state is stale (${age}s old, threshold=${STALE_THRESHOLD_SECONDS}s)"
+    return 0
+  fi
+  return 1
+}
+
 main_loop() {
   while [[ $shutdown -eq 0 ]]; do
     if replace_signal_pending; then
       process_replace_signal || true
     elif ! builder_running; then
+      log "Builder container not running, restarting"
       do_restart_builder || true
+    elif builder_stale; then
+      log "Builder appears stuck, restarting"
+      docker restart "${BUILDER_CONTAINER}" 2>/dev/null || do_restart_builder || true
+      write_heartbeat "restarted_stale"
+      sleep 30
+      continue
     fi
     write_heartbeat "ok"
     sleep "${POLL_INTERVAL}"

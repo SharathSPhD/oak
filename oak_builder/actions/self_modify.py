@@ -50,7 +50,7 @@ class SelfModify(Action):
         return 0.1
 
     async def execute(self, state: CortexState) -> ActionResult:
-        scope = self._determine_scope(state)
+        scope = await self._determine_scope(state)
         ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
         branch = f"self/{ts}-{scope}"
         worktree_path = f"/oak-builder-wt/{ts}-{scope}"
@@ -117,14 +117,55 @@ class SelfModify(Action):
             state.active_branch = ""
             return ActionResult(success=False, summary=str(exc))
 
-    def _determine_scope(self, state: CortexState) -> str:
-        if state.recent_failures:
-            last = state.recent_failures[-1]
-            action = last.get("action", "")
-            if "prompt" in action:
-                return "prompt"
-            if "harness" in action or "specialist" in action.lower():
-                return "harness"
+    async def _determine_scope(self, state: CortexState) -> str:
+        """Use LLM to determine what scope the self-modification should target."""
+        if not state.recent_failures:
+            return "config"
+
+        failure_context = json.dumps(state.recent_failures[-5:], indent=2)[:2000]
+        success_context = json.dumps(state.recent_successes[-3:], indent=2)[:1000]
+
+        prompt = (
+            "You are analyzing OAK builder failures to determine what to fix.\n\n"
+            f"Recent failures:\n{failure_context}\n\n"
+            f"Recent successes:\n{success_context}\n\n"
+            "Based on these patterns, what scope should the fix target?\n"
+            "Choose exactly ONE of: prompt, harness, config, pipeline, generator\n\n"
+            "- prompt: Agent prompt templates need improvement\n"
+            "- harness: The Docker harness entrypoint script needs fixing\n"
+            "- config: Configuration (model routing, settings) needs adjustment\n"
+            "- pipeline: The problem submission/monitoring pipeline has issues\n"
+            "- generator: The synthetic data generator needs fixing\n\n"
+            "Respond with ONLY the scope name, nothing else."
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    f"{self.ollama_url}/v1/chat/completions",
+                    json={
+                        "model": "qwen3-coder",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 20,
+                        "temperature": 0.1,
+                    },
+                )
+                if resp.status_code == 200:
+                    content = (
+                        resp.json()
+                        .get("choices", [{}])[0]
+                        .get("message", {})
+                        .get("content", "")
+                        .strip()
+                        .lower()
+                    )
+                    valid_scopes = {"prompt", "harness", "config", "pipeline", "generator"}
+                    for scope in valid_scopes:
+                        if scope in content:
+                            return scope
+        except Exception as exc:
+            logger.warning("Scope determination LLM failed: %s", exc)
+
         return "config"
 
     async def _apply_change(
@@ -268,6 +309,8 @@ class SelfModify(Action):
             "harness": "claude-harness",
             "config": "api",
             "builder": "builder",
+            "pipeline": "builder",
+            "generator": "builder",
         }
         return mapping.get(scope, "")
 

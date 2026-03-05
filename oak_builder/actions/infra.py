@@ -38,15 +38,15 @@ class RebuildImage(Action):
         return "infra"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        if state.get("image_rebuild_needed"):
+        if getattr(state, "image_rebuild_needed", None):
             return 0.9
-        if state.get("code_changed"):
+        if getattr(state, "code_changed", None):
             return 0.6
         return 0.2
 
     async def execute(self, state: CortexState) -> ActionResult:
-        service = state.get("service", "api")
-        version = state.get("image_version", 1)
+        service = getattr(state, "service", "api")
+        version = getattr(state, "image_version", 1)
         tag = f"oak/{service}:self-v{version}"
 
         dockerfile_dir = Path(self.repo_path) / "docker" / service
@@ -134,7 +134,7 @@ class UpdateDependency(Action):
         return "infra"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        if state.get("dependencies_outdated"):
+        if getattr(state, "dependencies_outdated", None):
             return 0.8
         return 0.3
 
@@ -227,12 +227,12 @@ class AddDependency(Action):
         return "infra"
 
     async def estimate_value(self, state: CortexState, perception: Perception) -> float:
-        if state.get("dependency_to_add"):
+        if getattr(state, "dependency_to_add", None):
             return 0.8
         return 0.3
 
     async def execute(self, state: CortexState) -> ActionResult:
-        package = state.get("dependency_to_add")
+        package = getattr(state, "dependency_to_add", None)
         if not package:
             return ActionResult(success=False, summary="No dependency_to_add in state")
 

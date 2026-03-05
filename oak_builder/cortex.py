@@ -1,6 +1,8 @@
 """Cortex — the brain of the OAK autonomous builder.
 
 Replaces the fixed-sprint loop with a perception-decision-action cognitive loop.
+Syncs state to Redis so the API + UI can observe it in real time.
+Subscribes to Redis pubsub for pause/resume/start control from the UI.
 """
 from __future__ import annotations
 
@@ -12,20 +14,27 @@ import logging
 import os
 import subprocess
 from abc import ABC, abstractmethod
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+import redis.asyncio as aioredis
 
 logger = logging.getLogger("oak.builder.cortex")
 
 DEFAULT_CORTEX_STATE_PATH = "/workspaces/builder/cortex_state.json"
 DEFAULT_THOUGHTS_LOG_PATH = "/workspaces/builder/thoughts.log"
-REST_SECONDS = int(os.environ.get("OAK_BUILDER_REST_SECONDS", "900"))
-FAILURE_COOLDOWN_CYCLES = 3
+REST_SECONDS = int(os.environ.get("OAK_BUILDER_REST_SECONDS", "120"))
+FAILURE_COOLDOWN_CYCLES = 1
 RESOURCE_PRESSURE_CPU_PCT = 90.0
 RESOURCE_PRESSURE_MEM_PCT = 85.0
+
+REDIS_STATE_KEY = "oak:builder:state"
+REDIS_HISTORY_KEY = "oak:builder:history"
+REDIS_CONTROL_CHANNEL = "oak:builder:control"
+REDIS_THOUGHTS_KEY = "oak:builder:thoughts"
 
 
 @dataclass
@@ -137,9 +146,13 @@ class Cortex:
         thoughts_log_path: str | None = None,
         manifest_domains_path: str | None = None,
         ollama_container: str | None = None,
+        redis_url: str | None = None,
     ) -> None:
         self.api_url = api_url.rstrip("/")
         self.ollama_url = ollama_url.rstrip("/")
+        self.redis_url = redis_url or os.environ.get(
+            "OAK_REDIS_URL", "redis://oak-redis:6379/0"
+        )
         self.state_path = Path(
             state_path
             or os.environ.get("OAK_CORTEX_STATE_PATH", DEFAULT_CORTEX_STATE_PATH)
@@ -158,6 +171,10 @@ class Cortex:
 
         self.state = self._load_state()
         self.actions: dict[str, Action] = {}
+        self._paused = False
+        self._stopped = False
+        self._current_status = "idle"
+        self._recent_thoughts: list[str] = []
 
     def register_action(self, action: Action) -> None:
         """Register an action for the decision loop."""
@@ -166,39 +183,240 @@ class Cortex:
             logger.debug("Registered action: %s (%s)", action.name, action.category)
 
     async def run(self) -> None:
-        """Main cognitive loop — runs forever."""
+        """Main cognitive loop — runs until stopped."""
         await self._wait_for_api()
-        while True:
+        asyncio.create_task(self._control_listener())
+        while not self._stopped:
             try:
-                if self._should_rest():
-                    self._think("Resting — resource pressure or cooldown")
-                    await asyncio.sleep(REST_SECONDS)
+                if self._paused:
+                    self._set_status("paused")
+                    await self._sync_to_redis()
+                    await asyncio.sleep(5)
                     continue
 
+                if self._should_rest():
+                    self._think("Resting — resource pressure or cooldown")
+                    self._set_status("resting")
+                    await self._sync_to_redis()
+                    await self._interruptible_sleep(REST_SECONDS)
+                    continue
+
+                self._set_status("perceiving")
+                await self._sync_to_redis()
                 perception = await self.perceive()
 
                 if perception.user_problems_active:
                     self._think("User problems active — deferring all actions")
-                    await asyncio.sleep(30)
+                    self._set_status("deferred")
+                    await self._sync_to_redis()
+                    await self._interruptible_sleep(30)
                     continue
 
+                self._set_status("deciding")
+                await self._sync_to_redis()
                 action_name = await self.reflect_and_decide(perception)
 
                 if action_name:
+                    self._set_status("running")
+                    await self._sync_to_redis()
                     result = await self.act(action_name, perception)
                     await self.learn(action_name, result)
                 else:
-                    self._think("No high-value action — resting")
-                    await asyncio.sleep(REST_SECONDS)
+                    self._think("No high-value action — resting briefly")
+                    self._set_status("resting")
+                    await self._sync_to_redis()
+                    await self._interruptible_sleep(30)
                     continue
 
                 self.state.cycle_count += 1
                 self._save_state()
+                await self._sync_to_redis()
 
             except Exception as exc:
                 logger.exception("Cortex loop error: %s", exc)
                 self._think(f"Loop error (recovering): {exc}")
-                await asyncio.sleep(60)
+                self._set_status("error")
+                await self._sync_to_redis()
+                await self._interruptible_sleep(30)
+
+        self._think("Cortex stopped gracefully — saving state")
+        self._set_status("stopped")
+        self._save_state()
+        await self._sync_to_redis()
+        logger.info("Cortex shut down cleanly at cycle %d", self.state.cycle_count)
+
+    def _set_status(self, status: str) -> None:
+        self._current_status = status
+
+    async def _interruptible_sleep(self, seconds: int) -> None:
+        """Sleep in 5-second chunks, waking early on stop or resume."""
+        for _ in range(0, seconds, 5):
+            if self._stopped:
+                return
+            await asyncio.sleep(5)
+            if self._stopped:
+                return
+            if not self._paused and self._current_status == "resting":
+                break
+
+    async def _control_listener(self) -> None:
+        """Background task: subscribe to Redis pubsub for pause/resume/start."""
+        while True:
+            try:
+                r = aioredis.from_url(self.redis_url, decode_responses=True)
+                pubsub = r.pubsub()
+                await pubsub.subscribe(REDIS_CONTROL_CHANNEL)
+                logger.info("Subscribed to %s", REDIS_CONTROL_CHANNEL)
+                async for msg in pubsub.listen():
+                    if msg["type"] != "message":
+                        continue
+                    try:
+                        payload = json.loads(msg["data"])
+                        action = payload.get("action", "")
+                        if action == "pause":
+                            self._paused = True
+                            self._think("Paused by control channel")
+                        elif action in ("resume", "start"):
+                            self._paused = False
+                            self._think(f"Resumed by control channel ({action})")
+                        elif action == "stop":
+                            self._stopped = True
+                            self._paused = False
+                            self._think("Stop requested — shutting down gracefully")
+                            logger.info("Stop signal received via control channel")
+                            return
+                        else:
+                            self._think(f"Unknown control action: {action}")
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            except Exception as exc:
+                logger.warning("Control listener error (reconnecting): %s", exc)
+                await asyncio.sleep(5)
+
+    async def _sync_to_redis(self) -> None:
+        """Write current state + history to Redis so the API/UI can see it."""
+        try:
+            r = aioredis.from_url(self.redis_url, decode_responses=True)
+
+            consecutive_failures = 0
+            for ep in reversed(self.state.recent_failures + self.state.recent_successes):
+                if ep.get("success"):
+                    break
+                consecutive_failures += 1
+
+            state_payload = {
+                "status": self._current_status,
+                "builder_enabled": True,
+                "cycle_count": self.state.cycle_count,
+                "last_action": self.state.last_action,
+                "last_action_result": self.state.last_action_result,
+                "last_action_time": self.state.last_action_time,
+                "circuit_breaker": {
+                    "state": "halted" if consecutive_failures >= 5 else "closed",
+                    "consecutive_failures": consecutive_failures,
+                },
+                "current_sprint": {
+                    "cycle": self.state.cycle_count,
+                    "action": self.state.last_action,
+                } if self._current_status == "running" else None,
+                "last_sprint_result": self._last_sprint_result(),
+                "thoughts": self._recent_thoughts[-10:],
+            }
+            await r.set(REDIS_STATE_KEY, json.dumps(state_payload), ex=300)
+
+            sprints = []
+            all_episodes = sorted(
+                self.state.recent_successes + self.state.recent_failures,
+                key=lambda e: e.get("cycle", 0),
+            )
+            for ep in all_episodes:
+                sprints.append({
+                    "sprint_number": ep.get("cycle", 0),
+                    "started_at": ep.get("timestamp", ""),
+                    "problems_submitted": 1,
+                    "problems_passed": 1 if ep.get("success") else 0,
+                    "skills_ingested": ep.get("artifacts", {}).get("skills_ingested", 0)
+                    if isinstance(ep.get("artifacts"), dict) else 0,
+                    "changes_committed": False,
+                    "circuit_breaker_state": "closed",
+                    "action": ep.get("action", ""),
+                    "summary": ep.get("summary", ""),
+                    "success": ep.get("success", False),
+                })
+
+            domain_baselines = {}
+            try:
+                async with httpx.AsyncClient(
+                    base_url=self.api_url, timeout=5
+                ) as client:
+                    for domain in [
+                        "sales", "pricing", "marketing", "supply_chain",
+                        "customer", "finance", "operations", "human_capital",
+                        "product",
+                    ]:
+                        try:
+                            resp = await client.get(
+                                "/api/skills",
+                                params={"status": "permanent", "category": domain, "top_k": 50},
+                            )
+                            if resp.status_code == 200:
+                                skills = resp.json()
+                                count = len(skills) if isinstance(skills, list) else 0
+                                domain_baselines[domain] = min(count / 3.0, 1.0)
+                            else:
+                                domain_baselines[domain] = 0.0
+                        except httpx.HTTPError:
+                            domain_baselines[domain] = 0.0
+            except Exception:
+                pass
+
+            skill_count = 0
+            try:
+                async with httpx.AsyncClient(
+                    base_url=self.api_url, timeout=5
+                ) as client:
+                    resp = await client.get("/api/skills", params={"top_k": 500})
+                    if resp.status_code == 200:
+                        skills = resp.json()
+                        skill_count = len(skills) if isinstance(skills, list) else 0
+            except Exception:
+                pass
+
+            history_payload = {
+                "sprint_count": self.state.cycle_count,
+                "total_skills": skill_count,
+                "total_commits": 0,
+                "release_count": 0,
+                "stories_since_release": self.state.cycle_count % 5,
+                "domain_baselines": domain_baselines,
+                "sprints": sprints[-20:],
+            }
+            await r.set(REDIS_HISTORY_KEY, json.dumps(history_payload), ex=300)
+
+            if self._recent_thoughts:
+                await r.set(
+                    REDIS_THOUGHTS_KEY,
+                    json.dumps(self._recent_thoughts[-50:]),
+                    ex=300,
+                )
+
+            await r.aclose()
+        except Exception as exc:
+            logger.debug("Redis sync failed: %s", exc)
+
+    def _last_sprint_result(self) -> dict | None:
+        all_episodes = self.state.recent_successes + self.state.recent_failures
+        if not all_episodes:
+            return None
+        recent = sorted(all_episodes, key=lambda e: e.get("cycle", 0))[-5:]
+        passed = sum(1 for e in recent if e.get("success"))
+        failed = len(recent) - passed
+        return {
+            "passed": passed,
+            "failed": failed,
+            "skills": 0,
+            "committed": False,
+        }
 
     async def perceive(self) -> Perception:
         """Read all signals: telemetry, skills, verdicts, models, resources, manifest."""
@@ -312,26 +530,30 @@ class Cortex:
         return gaps
 
     async def _fetch_available_models(self) -> list[str]:
-        """Fetch available Ollama models via HTTP or docker exec."""
-        # Try OpenAI-compatible /v1/models first (proxy)
+        """Fetch available Ollama models directly (not via proxy)."""
+        ollama_direct = os.environ.get("OAK_OLLAMA_DIRECT_URL", "http://oak-ollama:11434")
+        # Use Ollama native /api/tags for accurate local model list
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"{ollama_direct}/api/tags")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    models = data.get("models", [])
+                    return [m.get("name", "") for m in models if m.get("name")]
+        except httpx.HTTPError:
+            pass
+
+        # Fallback: try proxy but filter out non-local models
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(f"{self.ollama_url}/v1/models")
                 if resp.status_code == 200:
                     data = resp.json()
                     models = data.get("data", [])
-                    return [m.get("id", "") for m in models if m]
-        except httpx.HTTPError:
-            pass
-
-        # Try Ollama native /api/tags
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(f"{self.ollama_url}/api/tags")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    models = data.get("models", [])
-                    return [m.get("name", "") for m in models if m.get("name")]
+                    return [
+                        m.get("id", "") for m in models
+                        if m and "claude" not in m.get("id", "").lower()
+                    ]
         except httpx.HTTPError:
             pass
 
@@ -390,23 +612,75 @@ class Cortex:
             self._think("No actions registered — cannot decide")
             return None
 
-        # Build context for the LLM
         context = self._build_perception_summary(p)
+
+        action_descriptions = {
+            "run_domain_problem": "Generate a synthetic dataset for a domain gap, submit it through the pipeline, run specialists and judge",
+            "audit_self": "Introspect on recent performance: review success/failure rates, identify patterns, suggest improvements",
+            "replay_failure": "Re-examine a recent failure to understand root cause and learn from it",
+            "benchmark_regression": "Run canonical benchmark problems to detect quality regressions",
+            "web_research": "Search the web for techniques, papers, or tools relevant to current gaps",
+            "harvest_huggingface": "Browse HuggingFace for useful models, datasets, or techniques",
+            "read_paper": "Read and summarize a research paper relevant to current domain gaps",
+            "pull_model": "Download a new Ollama model to expand capabilities",
+            "benchmark_models": "Compare available models on quality/speed for different roles",
+            "update_routing": "Update model-to-role routing based on benchmark results",
+            "improve_prompt": "Refine agent prompts based on failure analysis",
+            "improve_harness": "Improve the harness entrypoint script for better specialist execution",
+            "fix_bug": "Fix a known bug identified through introspection or failure replay",
+            "add_feature": "Add a new capability to the OAK system",
+            "open_branch": "Create a git branch for a planned code change",
+            "pr_review": "Review pending pull requests",
+            "run_acceptance": "Run lint + test acceptance suite",
+            "merge_to_main": "Merge an accepted branch to main",
+            "push_to_remote": "Push main to the remote repository",
+            "rebuild_image": "Rebuild a Docker image after code changes",
+            "update_dependency": "Update a Python/system dependency",
+            "add_dependency": "Add a new dependency to requirements",
+            "build_rag_index": "Build or update the RAG index from domain knowledge",
+            "evaluate_rag_quality": "Evaluate RAG retrieval quality",
+            "propose_amendment": "Propose a change to the OAK manifest",
+            "ratify_amendment": "Approve and apply a proposed manifest change",
+            "self_modify": "Full self-modification pipeline: branch, change, test, merge, rebuild, hot-swap",
+        }
+
         actions_list = "\n".join(
-            f"- {name} ({a.category})" for name, a in self.actions.items()
+            f"- {name} ({a.category}): {action_descriptions.get(name, 'No description')}"
+            for name, a in self.actions.items()
         )
 
-        prompt = f"""You are the OAK autonomous builder's decision engine.
-Given the current perception, choose the single best action to execute next,
-or respond with "rest" if no action has sufficient value.
+        recent_action_counts = Counter(
+            e.get("action", "") for e in
+            (self.state.recent_successes[-10:] + self.state.recent_failures[-10:])
+        )
+        diversity_note = ""
+        if recent_action_counts:
+            most_common = recent_action_counts.most_common(1)[0]
+            if most_common[1] >= 3:
+                diversity_note = (
+                    f"\nIMPORTANT: You have chosen '{most_common[0]}' {most_common[1]} times "
+                    f"in the last {sum(recent_action_counts.values())} cycles. "
+                    f"Strongly consider a DIFFERENT action for diversity and broader improvement."
+                )
+
+        prompt = f"""You are the OAK autonomous builder's strategic decision engine.
+Your goal is to make OAK continuously better — not just run domain problems, but also
+introspect, audit, pull new models, improve prompts, fix bugs, and self-modify.
 
 Current state:
 {context}
 
-Available actions:
+Available actions (name, category, description):
 {actions_list}
+{diversity_note}
 
-Respond with ONLY the action name (exactly as listed) or "rest". No explanation."""
+Think step by step:
+1. What is the most impactful action right now given the current state?
+2. Have I been doing the same thing repeatedly? If so, try something different.
+3. Are there failures I should diagnose before running more problems?
+
+Respond with your reasoning in 1-2 sentences, then on the LAST LINE write ONLY the action name.
+If no action has value, write "rest" on the last line."""
 
         try:
             async with httpx.AsyncClient(timeout=60) as client:
@@ -415,8 +689,8 @@ Respond with ONLY the action name (exactly as listed) or "rest". No explanation.
                     json={
                         "model": "qwen3-coder",
                         "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 50,
-                        "temperature": 0.2,
+                        "max_tokens": 200,
+                        "temperature": 0.4,
                     },
                 )
                 if resp.status_code != 200:
@@ -428,27 +702,33 @@ Respond with ONLY the action name (exactly as listed) or "rest". No explanation.
                 if not choices:
                     return None
 
-                content = (
+                raw = (
                     choices[0]
                     .get("message", {})
                     .get("content", "")
                     .strip()
-                    .lower()
                 )
 
-                self._think(f"LLM chose: {content}")
-
-                if content == "rest" or not content:
+                lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
+                if not lines:
                     return None
 
-                # Match to registered action (case-insensitive)
+                chosen = lines[-1].lower().strip("` .*")
+                reasoning = " ".join(lines[:-1])[:200] if len(lines) > 1 else ""
+
+                self._think(f"LLM reasoning: {reasoning}")
+                self._think(f"LLM chose: {chosen}")
+
+                if chosen == "rest" or not chosen:
+                    return None
+
                 for name in self.actions:
-                    if name.lower() in content or content in name.lower():
+                    if name.lower() == chosen:
                         return name
 
-                # Exact match
-                if content in self.actions:
-                    return content
+                for name in self.actions:
+                    if name.lower() in chosen or chosen in name.lower():
+                        return name
 
                 return None
 
@@ -458,32 +738,71 @@ Respond with ONLY the action name (exactly as listed) or "rest". No explanation.
             return None
 
     def _build_perception_summary(self, p: Perception) -> str:
-        """Build a concise text summary of perception for the LLM."""
+        """Build a rich text summary of perception for the LLM."""
         last_result = ""
         if self.state.last_action_result:
-            last_result = f" ({self.state.last_action_result[:80]}...)"
+            last_result = f" => {self.state.last_action_result[:120]}"
         parts = [
             f"Cycle: {self.state.cycle_count}",
             f"Last action: {self.state.last_action or 'none'}{last_result}",
-            f"Skill gaps: {len(p.skill_gaps)}",
-            f"Failed problems: {len(p.failed_problems)}",
-            f"Completed problems: {len(p.completed_problems)}",
-            f"Available models: {len(p.available_models)}",
+            f"Skill gaps: {len(p.skill_gaps)} domains below floor",
+            f"Total failed problems: {len(p.failed_problems)}",
+            f"Total completed problems: {len(p.completed_problems)}",
+            f"Available models: {', '.join(p.available_models[:5]) or 'none'}",
             f"Circuit breaker: {p.circuit_breaker_state}",
-            f"Recent failures: {len(self.state.recent_failures)}",
-            f"Recent successes: {len(self.state.recent_successes)}",
         ]
+
         if p.resource_usage:
             parts.append(
-                f"Resource: CPU {p.resource_usage.get('cpu_pct', 0)}%, "
-                f"Mem {p.resource_usage.get('memory_pct', 0)}%"
+                f"Resources: CPU {p.resource_usage.get('cpu_pct', 0):.0f}%, "
+                f"Mem {p.resource_usage.get('memory_pct', 0):.0f}%"
             )
+
         if p.skill_gaps:
-            parts.append(
-                "Top gaps: " + ", ".join(
-                    g["domain_name"] for g in p.skill_gaps[:3]
+            gap_details = []
+            for g in p.skill_gaps[:5]:
+                gap_details.append(
+                    f"  {g['domain_name']}: {g['permanent_count']}/{g['floor']} skills "
+                    f"(gap={g['gap_score']:.0%})"
                 )
+            parts.append("Skill gap details:\n" + "\n".join(gap_details))
+
+        if self.state.recent_failures:
+            fail_details = []
+            for f in self.state.recent_failures[-3:]:
+                fail_details.append(
+                    f"  cycle {f.get('cycle')}: {f.get('action')} — {f.get('summary', '')[:100]}"
+                )
+            parts.append(f"Recent failures ({len(self.state.recent_failures)} total):\n" + "\n".join(fail_details))
+
+        if self.state.recent_successes:
+            succ_details = []
+            for s in self.state.recent_successes[-3:]:
+                succ_details.append(
+                    f"  cycle {s.get('cycle')}: {s.get('action')} — {s.get('summary', '')[:80]}"
+                )
+            parts.append(f"Recent successes ({len(self.state.recent_successes)} total):\n" + "\n".join(succ_details))
+
+        action_counts = Counter(
+            e.get("action", "") for e in
+            (self.state.recent_successes[-10:] + self.state.recent_failures[-10:])
+        )
+        if action_counts:
+            dist = ", ".join(f"{k}={v}" for k, v in action_counts.most_common(5))
+            parts.append(f"Action distribution (last 10): {dist}")
+
+        model_names = [m for m in p.available_models if "embed" not in m]
+        if len(model_names) < 3:
+            parts.append(
+                f"NOTE: Only {len(model_names)} non-embedding model(s) available. "
+                f"Consider pull_model to expand capabilities."
             )
+        elif not any("benchmark" in e.get("action", "") for e in self.state.recent_successes[-20:]):
+            parts.append(
+                f"NOTE: {len(model_names)} models available but never benchmarked. "
+                f"Consider benchmark_models to compare quality/speed."
+            )
+
         return "\n".join(parts)
 
     async def act(
@@ -547,8 +866,11 @@ Respond with ONLY the action name (exactly as listed) or "rest". No explanation.
             pass
 
     def _think(self, thought: str) -> None:
-        """Log a thought with timestamp."""
-        line = f"[{datetime.now(UTC).isoformat()}] {thought}\n"
+        """Log a thought with timestamp and buffer for Redis sync."""
+        ts = datetime.now(UTC).isoformat()
+        line = f"[{ts}] {thought}\n"
+        self._recent_thoughts.append(f"[{ts}] {thought}")
+        self._recent_thoughts = self._recent_thoughts[-50:]
         try:
             self.thoughts_log.parent.mkdir(parents=True, exist_ok=True)
             with open(self.thoughts_log, "a") as f:

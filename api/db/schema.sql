@@ -57,7 +57,7 @@ CREATE INDEX ON episodes USING hnsw (embedding vector_cosine_ops);
 CREATE TABLE skills (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name TEXT NOT NULL UNIQUE,
-    category TEXT NOT NULL CHECK (category IN ('etl','analysis','ml','ui','infra')),
+    category TEXT NOT NULL CHECK (category IN ('etl','analysis','ml','ui','infra','sales','pricing','marketing','supply_chain','customer','finance','operations','human_capital','product','general')),
     description TEXT NOT NULL,
     trigger_keywords TEXT[] NOT NULL DEFAULT '{}',
     embedding vector(768),
