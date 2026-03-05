@@ -85,6 +85,22 @@ async def resume_builder() -> dict[str, str]:
         await r.aclose()
 
 
+@router.get("/heartbeat")
+async def builder_heartbeat() -> dict[str, Any]:
+    """Heartbeat endpoint for the watchdog to verify builder health."""
+    r = await _get_redis()
+    try:
+        raw = await r.get(REDIS_STATE_KEY)
+        state = json.loads(raw) if raw else {"status": "idle"}
+        return {
+            "alive": True,
+            "status": state.get("status", "unknown"),
+            "cycle_count": state.get("cycle_count", 0),
+        }
+    finally:
+        await r.aclose()
+
+
 @router.get("/history")
 async def builder_history(limit: int = 10) -> dict[str, Any]:
     """Past sprint results with per-domain skill counts."""

@@ -98,3 +98,17 @@ CREATE TABLE judge_verdicts (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX ON judge_verdicts (task_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS domain_knowledge (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    domain TEXT NOT NULL,
+    content TEXT NOT NULL,
+    embedding vector(768),
+    source_url TEXT,
+    source_type TEXT DEFAULT 'web' CHECK (source_type IN ('web','paper','hf_model','manual','episode')),
+    chunk_index INTEGER DEFAULT 0,
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX ON domain_knowledge USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON domain_knowledge (domain, created_at DESC);

@@ -340,29 +340,50 @@ services:
       OAK_API_URL: http://oak-api:8000
       REDIS_URL: redis://oak-redis:6379
       OAK_BUILDER_OLLAMA_URL: http://oak-api-proxy:9000
+      OAK_BUILDER_OLLAMA_DIRECT: http://oak-ollama:11434
       OAK_REPO_PATH: /oak-repo
       OAK_WORKSPACE_BASE: /workspaces
-      OAK_BUILDER_SPRINT_INTERVAL: "${OAK_BUILDER_SPRINT_INTERVAL:-3600}"
+      OAK_CORTEX_STATE_PATH: /workspaces/builder/cortex_state.json
+      OAK_CORTEX_THOUGHTS_LOG: /workspaces/builder/thoughts.log
       OAK_BUILDER_REST_SECONDS: "${OAK_BUILDER_REST_SECONDS:-900}"
-      OAK_BUILDER_MAX_SPRINTS: "${OAK_BUILDER_MAX_SPRINTS:-8}"
-      OAK_BUILDER_WALL_LIMIT: "${OAK_BUILDER_WALL_LIMIT:-28800}"
-      OAK_BUILDER_CB_THRESHOLD: "${OAK_BUILDER_CB_THRESHOLD:-4}"
-      OAK_BUILDER_WORKTREE_PATH: /oak-builder-wt
       OAK_BUILDER_CODER_MODEL: qwen3-coder
       OAK_BUILDER_REASONING_MODEL: llama3.3:70b
       OAK_BUILDER_RELEASE_THRESHOLD: "5"
+      HF_TOKEN: "${HF_TOKEN:-}"
+      BRAVE_SEARCH_API_KEY: "${BRAVE_SEARCH_API_KEY:-}"
       GIT_AUTHOR_NAME: oak-builder
       GIT_AUTHOR_EMAIL: oak@self
       GIT_COMMITTER_NAME: oak-builder
       GIT_COMMITTER_EMAIL: oak@self
+      GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${OAK_ROOT}:/oak-repo
       - ${OAK_WORKSPACE_BASE}:/workspaces
       - builder-worktree:/oak-builder-wt
+      - watchdog-signals:/watchdog/signals
+      - ${HOME}/.ssh:/root/.ssh:ro
     depends_on:
       oak-api:
         condition: service_healthy
+    profiles: ["dgx", "mini", "cloud"]
+
+  oak-watchdog:
+    image: oak/watchdog:latest
+    build:
+      context: ..
+      dockerfile: docker/watchdog/Dockerfile
+    restart: unless-stopped
+    networks: [oak-net]
+    environment:
+      BUILDER_CONTAINER: docker-oak-builder-1
+      OAK_ROOT: ${OAK_ROOT}
+      OAK_BUILDER_HEARTBEAT_URL: http://oak-api:8000/api/builder/heartbeat
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - watchdog-signals:/watchdog/signals
+    depends_on:
+      - oak-builder
     profiles: ["dgx", "mini", "cloud"]
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -407,3 +428,4 @@ volumes:
   oak-skills:
   ollama-models:
   builder-worktree:
+  watchdog-signals:
